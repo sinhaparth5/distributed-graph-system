@@ -15,8 +15,8 @@ pub struct Edge {
 }
 
 pub struct Graph {
-    nodes: HashMap<usize, Node>,
-    adj_list: HashMap<usize, Vec<(usize, f64)>>
+    pub(crate) nodes: HashMap<usize, Node>,
+    pub(crate) adj_list: HashMap<usize, Vec<(usize, f64)>>
 }
 
 impl Graph {
