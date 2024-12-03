@@ -1,17 +1,12 @@
-use axum::{
-    extract::Multipart,
-    routing::post,
-    http::StatusCode,
-    Router,
-    Json,
-    response::{IntoResponse, Response},
-};
+#[macro_use] extern crate rocket;
+
+use rocket::fs::TempFile;
+use rocket::http::Status;
+use rocket::serde::json::Json;
+use rocket::{post, routes};
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
-use tower_http::cors::{CorsLayer, Any};
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
-// Import from the crate root instead of using crate::
+use rocket::form::Form;
+use tempfile::NamedTempFile;
 use dristributed_graph_system::file_processor::{process_file, FileFormat, ProcessError};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,72 +25,68 @@ struct ProcessResponse {
     error: Option<String>,
 }
 
-#[derive(Debug, thiserror::Error)]
-enum AppError {
-    #[error("File processing error: {0}")]
-    FileProcessing(#[from] ProcessError),
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Invalid request: {0}")]
-    BadRequest(String),
-    #[error("Internal server error: {0}")]
-    Internal(String),
+#[derive(Debug, FromForm)]
+struct UploadForm<'f> {
+    file: TempFile<'f>,
+    request: String,
 }
 
-impl IntoResponse for AppError {
-    fn into_response(self) -> Response {
-        let (status, message) = match self {
-            AppError::FileProcessing(e) => (StatusCode::BAD_REQUEST, e.to_string()),
-            AppError::Io(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-            AppError::BadRequest(e) => (StatusCode::BAD_REQUEST, e),
-            AppError::Internal(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
-        };
+// Explicitly specify the lifetime parameter
+#[post("/process_file", data = "<form>")]
+async fn process_graph_file<'f>(mut form: Form<UploadForm<'f>>) -> Result<Json<ProcessResponse>, Status> {
+    println!("Received request data: {}", form.request);
 
-        let body = Json(ProcessResponse {
+    let request: ProcessRequest = match serde_json::from_str(&form.request) {
+        Ok(req) => req,
+        Err(e) => {
+            println!("JSON parsing error: {}", e);
+            return Ok(Json(ProcessResponse {
+                result: "error".to_string(),
+                path: None,
+                distances: None,
+                error: Some(format!("Invalid request format: {}", e)),
+            }));
+        }
+    };
+
+    let temp_file = match NamedTempFile::new() {
+        Ok(file) => file,
+        Err(e) => {
+            println!("Temp file creation error: {}", e);
+            return Ok(Json(ProcessResponse {
+                result: "error".to_string(),
+                path: None,
+                distances: None,
+                error: Some("Failed to create temporary file".to_string()),
+            }));
+        }
+    };
+
+    if let Err(e) = form.file.persist_to(temp_file.path()).await {
+        println!("File persistence error: {}", e);
+        return Ok(Json(ProcessResponse {
             result: "error".to_string(),
             path: None,
             distances: None,
-            error: Some(message),
-        });
-
-        (status, body).into_response()
+            error: Some("Failed to save uploaded file".to_string()),
+        }));
     }
-}
 
-async fn process_graph_file(mut multipart: Multipart) -> Result<impl IntoResponse, AppError> {
-    let mut file_data = Vec::new();
-    let mut request: Option<ProcessRequest> = None;
-
-    while let Some(field) = multipart.next_field().await.map_err(|e| AppError::BadRequest(e.to_string()))? {
-        let name = field.name().unwrap_or("").to_string();
-
-        match name.as_str() {
-            "file" => {
-                file_data = field.bytes().await.map_err(|e| AppError::BadRequest(e.to_string()))?.to_vec();
-            }
-            "request" => {
-                let data = field.bytes().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
-                request = Some(serde_json::from_slice(&data).map_err(|e| AppError::BadRequest(e.to_string()))?);
-            }
-            _ => {}
+    match process_file_and_run_algorithm(temp_file.path().to_str().unwrap(), request) {
+        Ok(result) => Ok(Json(result)),
+        Err(e) => {
+            println!("Processing error: {:?}", e);
+            Ok(Json(ProcessResponse {
+                result: "error".to_string(),
+                path: None,
+                distances: None,
+                error: Some(format!("Processing error: {:?}", e)),
+            }))
         }
     }
-
-    let request = request.ok_or_else(|| AppError::BadRequest("Missing request data".to_string()))?;
-
-    let temp_path = format!("/tmp/{}", uuid::Uuid::new_v4());
-    let mut temp_file = File::create(&temp_path).await?;
-    temp_file.write_all(&file_data).await?;
-    temp_file.flush().await?;
-
-    let result = process_file_and_run_algorithm(&temp_path, request).await?;
-
-    tokio::fs::remove_file(&temp_path).await?;
-
-    Ok(Json(result))
 }
 
-async fn process_file_and_run_algorithm(path: &str, request: ProcessRequest) -> Result<ProcessResponse, AppError> {
+fn process_file_and_run_algorithm(path: &str, request: ProcessRequest) -> Result<ProcessResponse, ProcessError> {
     let graph = process_file(path, request.file_format)?;
 
     let result = match request.algorithm.as_str() {
@@ -131,7 +122,7 @@ async fn process_file_and_run_algorithm(path: &str, request: ProcessRequest) -> 
         },
         "astar" => {
             let start = request.start_node.unwrap_or(0);
-            let end = request.end_node.ok_or_else(|| AppError::BadRequest("End node required for A*".to_string()))?;
+            let end = request.end_node.ok_or(ProcessError::ParsingError("End node required for A*".to_string()))?;
             let path = graph.astar(start, end);
             ProcessResponse {
                 result: "A* completed".to_string(),
@@ -163,31 +154,27 @@ async fn process_file_and_run_algorithm(path: &str, request: ProcessRequest) -> 
                 error: None,
             }
         },
-        _ => return Err(AppError::BadRequest("Invalid algorithm specified".to_string())),
+        _ => return Err(ProcessError::InvalidFormat),
     };
 
     Ok(result)
 }
 
-#[tokio::main]
-async fn main() {
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
+#[launch]
+fn rocket() -> _ {
+    let figment = rocket::Config::figment()
+        .merge(("address", "0.0.0.0"))
+        .merge(("port", 8000));
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = rocket::fairing::AdHoc::on_response("CORS", |_, res| {
+        Box::pin(async move {
+            res.set_header(rocket::http::Header::new("Access-Control-Allow-Origin", "*"));
+            res.set_header(rocket::http::Header::new("Access-Control-Allow-Methods", "POST, GET, OPTIONS"));
+            res.set_header(rocket::http::Header::new("Access-Control-Allow-Headers", "*"));
+        })
+    });
 
-    let app = Router::new()
-        .route("/process_file", post(process_graph_file))
-        .layer(cors);
-
-    // Change from 127.0.0.1 to 0.0.0.0 to bind to all interfaces
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    
-    tracing::info!("listening on {}", listener.local_addr().unwrap());
-    
-    axum::serve(listener, app).await.unwrap();
+    rocket::custom(figment)
+        .attach(cors)
+        .mount("/", routes![process_graph_file])
 }
