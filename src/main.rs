@@ -1,15 +1,18 @@
-mod graph; // Ensure this module is correctly implemented
-mod file_processor; // Ensure this module is correctly implemented
-
-use axum::{extract::Multipart, routing::post, http::StatusCode, Router, Json, response::{IntoResponse, Response}, serve};
+use axum::{
+    extract::Multipart,
+    routing::post,
+    http::StatusCode,
+    Router,
+    Json,
+    response::{IntoResponse, Response},
+};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use tower_http::cors::{CorsLayer, Any};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-use std::path::Path;
-use crate::file_processor::{process_file, FileFormat, ProcessError};
-use crate::graph::Graph;
+// Import from the crate root instead of using crate::
+use dristributed_graph_system::file_processor::{process_file, FileFormat, ProcessError};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProcessRequest {
@@ -80,29 +83,25 @@ async fn process_graph_file(mut multipart: Multipart) -> Result<impl IntoRespons
 
     let request = request.ok_or_else(|| AppError::BadRequest("Missing request data".to_string()))?;
 
-    // Save file to temporary location
     let temp_path = format!("/tmp/{}", uuid::Uuid::new_v4());
     let mut temp_file = File::create(&temp_path).await?;
     temp_file.write_all(&file_data).await?;
     temp_file.flush().await?;
 
-    // Process the file and run the algorithm
     let result = process_file_and_run_algorithm(&temp_path, request).await?;
 
-    // Clean up temporary file
     tokio::fs::remove_file(&temp_path).await?;
 
     Ok(Json(result))
 }
 
 async fn process_file_and_run_algorithm(path: &str, request: ProcessRequest) -> Result<ProcessResponse, AppError> {
-    // Ensure the graph is created from the processed file
-    let mut graph = process_file(path, request.file_format)?; // Ensure this returns a Graph<usize, usize>
+    let graph = process_file(path, request.file_format)?;
 
     let result = match request.algorithm.as_str() {
         "dfs" => {
-            let start = request.start_node.unwrap_or(0); // Default to node 0 if not provided
-            let path = graph.dfs(start); // Ensure this is defined in your Graph struct
+            let start = request.start_node.unwrap_or(0);
+            let path = graph.dfs(start);
             ProcessResponse {
                 result: "DFS completed".to_string(),
                 path: Some(path),
@@ -112,7 +111,7 @@ async fn process_file_and_run_algorithm(path: &str, request: ProcessRequest) -> 
         },
         "bfs" => {
             let start = request.start_node.unwrap_or(0);
-            let path = graph.bfs(start); // Ensure this is defined in your Graph struct
+            let path = graph.bfs(start);
             ProcessResponse {
                 result: "BFS completed".to_string(),
                 path: Some(path),
@@ -122,7 +121,7 @@ async fn process_file_and_run_algorithm(path: &str, request: ProcessRequest) -> 
         },
         "dijkstra" => {
             let start = request.start_node.unwrap_or(0);
-            let (distances, path) = graph.dijkstra(start); // Ensure this is defined in your Graph struct
+            let (distances, path) = graph.dijkstra(start);
             ProcessResponse {
                 result: "Dijkstra completed".to_string(),
                 path: Some(path),
@@ -132,8 +131,8 @@ async fn process_file_and_run_algorithm(path: &str, request: ProcessRequest) -> 
         },
         "astar" => {
             let start = request.start_node.unwrap_or(0);
-            let end = request.end_node.unwrap_or(0);
-            let path = graph.astar(start, end); // Ensure this is defined in your Graph struct
+            let end = request.end_node.ok_or_else(|| AppError::BadRequest("End node required for A*".to_string()))?;
+            let path = graph.astar(start, end);
             ProcessResponse {
                 result: "A* completed".to_string(),
                 path: Some(path),
@@ -143,7 +142,7 @@ async fn process_file_and_run_algorithm(path: &str, request: ProcessRequest) -> 
         },
         "bellman-ford" => {
             let start = request.start_node.unwrap_or(0);
-            let (distances, has_negative_cycle) = graph.bellman_ford(start); // Ensure this is defined in your Graph struct
+            let (distances, has_negative_cycle) = graph.bellman_ford(start);
             ProcessResponse {
                 result: if has_negative_cycle {
                     "Negative cycle detected".to_string()
@@ -156,7 +155,7 @@ async fn process_file_and_run_algorithm(path: &str, request: ProcessRequest) -> 
             }
         },
         "kruskal" => {
-            let mst = graph.kruskal(); // Ensure this is defined in your Graph struct
+            let mst = graph.kruskal();
             ProcessResponse {
                 result: "Kruskal's MST completed".to_string(),
                 path: Some(mst),
@@ -175,22 +174,20 @@ async fn main() {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
-    // Create CORS layer
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    // Build our application with a route
     let app = Router::new()
         .route("/process_file", post(process_graph_file))
         .layer(cors);
 
-    // Run our application
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    tracing::info!("listening on {}", addr);
-    axum_server::Server::bind(addr)
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    // Change from 127.0.0.1 to 0.0.0.0 to bind to all interfaces
+    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    
+    tracing::info!("listening on {}", listener.local_addr().unwrap());
+    
+    axum::serve(listener, app).await.unwrap();
 }

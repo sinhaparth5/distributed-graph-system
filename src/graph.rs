@@ -1,5 +1,7 @@
 use serde::{ Deserialize, Serialize };
-use std::collections::{HashSet, VecDeque, HashMap};
+use std::collections::{HashSet, VecDeque, HashMap, BinaryHeap};
+use std::ops::Neg;
+use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
@@ -14,9 +16,34 @@ pub struct Edge {
     pub weight: f64,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+struct OrderedFloat(f64);
+
+impl Eq for OrderedFloat {}
+
+impl PartialOrd for OrderedFloat {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+
+impl Ord for OrderedFloat {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+    }
+}
+
+impl Neg for OrderedFloat {
+    type Output = OrderedFloat;
+
+    fn neg(self) -> Self::Output {
+        OrderedFloat(-self.0)
+    }
+}
+
 pub struct Graph {
-    pub(crate) nodes: HashMap<usize, Node>,
-    pub(crate) adj_list: HashMap<usize, Vec<(usize, f64)>>
+    nodes: HashMap<usize, Node>,
+    adj_list: HashMap<usize, Vec<(usize, f64)>>,
 }
 
 impl Graph {
@@ -28,21 +55,38 @@ impl Graph {
     }
 
     pub fn add_node(&mut self, node: Node) {
-        self.nodes.insert(node.id, node.clone());
-        self.adj_list.entry(node.id).or_insert(Vec::new());
+        let node_id = node.id;
+        self.nodes.insert(node_id, node);
+        self.adj_list.entry(node_id).or_insert(Vec::new());
     }
 
     pub fn add_edge(&mut self, edge: Edge) {
+        if !self.nodes.contains_key(&edge.from) || !self.nodes.contains_key(&edge.to) {
+            return; // Silently ignore edges with non-existent nodes
+        }
+        
         self.adj_list
             .entry(edge.from)
             .or_insert(Vec::new())
             .push((edge.to, edge.weight));
     }
 
+    pub fn get_node(&self, id: usize) -> Option<&Node> {
+        self.nodes.get(&id)
+    }
+
+    pub fn get_neighbors(&self, id: usize) -> Option<&Vec<(usize, f64)>> {
+        self.adj_list.get(&id)
+    }
+
     pub fn dfs(&self, start: usize) -> Vec<usize> {
         let mut visited = HashSet::new();
         let mut path = Vec::new();
-        self.dfs_util(start, &mut visited, &mut path);
+
+        if self.nodes.contains_key(&start) {
+            self.dfs_util(start, &mut visited, &mut path);
+        }
+
         path
     }
 
@@ -64,6 +108,10 @@ impl Graph {
         let mut queue = VecDeque::new();
         let mut path = Vec::new();
 
+        if !self.nodes.contains_key(&start) {
+            return path;
+        }
+
         visited.insert(start);
         queue.push_back(start);
 
@@ -78,83 +126,124 @@ impl Graph {
                 }
             }
         }
-        path // Return the path of visited nodes
+        path
     }
 
     pub fn dijkstra(&self, start: usize) -> (Vec<f64>, Vec<usize>) {
-        let mut distances: HashMap<usize, f64> = HashMap::new();
-        let mut prev: HashMap<usize, usize> = HashMap::new();
-        let mut pq = priority_queue::PriorityQueue::new();
-        let mut visited = HashSet::new();
-
-        for &node_id in self.nodes.keys() {
-            distances.insert(node_id, f64::INFINITY);
+        if !self.nodes.contains_key(&start) {
+            return (Vec::new(), Vec::new());
         }
-        distances.insert(start, 0.0);
-        pq.push(start, std::cmp::Reverse(0.0));
 
-        while let Some((current, _)) = pq.pop() {
-            if visited.contains(&current) {
+        let mut distances: HashMap<usize, f64> = self.nodes.keys()
+            .map(|&k| (k, f64::INFINITY))
+            .collect();
+        let mut previous: HashMap<usize, Option<usize>> = self.nodes.keys()
+            .map(|&k| (k, None))
+            .collect();
+        
+        // Use BinaryHeap instead of PriorityQueue
+        let mut heap = BinaryHeap::new();
+
+        distances.insert(start, 0.0);
+        heap.push((-OrderedFloat(0.0), start));
+
+        while let Some((cost, current)) = heap.pop() {
+            let cost = -cost.0; // Convert back to actual cost
+
+            if cost > distances[&current] {
                 continue;
             }
-            visited.insert(current);
 
             if let Some(neighbors) = self.adj_list.get(&current) {
                 for &(next, weight) in neighbors {
-                    let new_dist = distances[&current] + weight;
-                    if new_dist < distances[&next] {
-                        distances.insert(next, new_dist);
-                        prev.insert(next, current);
-                        pq.push(next, std::cmp::Reverse(new_dist));
+                    let alt = distances[&current] + weight;
+                    if alt < distances[&next] {
+                        distances.insert(next, alt);
+                        previous.insert(next, Some(current));
+                        heap.push((-OrderedFloat(alt), next));
                     }
                 }
             }
         }
 
         let mut dist_vec = vec![f64::INFINITY; self.nodes.len()];
-        for (k, v) in distances {
-            dist_vec[k] = v;
+        for (&node, &dist) in distances.iter() {
+            if node < dist_vec.len() {
+                dist_vec[node] = dist;
+            }
         }
-        (dist_vec, Vec::new())
+
+        let path = self.reconstruct_path(&previous, start);
+        (dist_vec, path)
     }
 
     pub fn astar(&self, start: usize, goal: usize) -> Vec<usize> {
+        if !self.nodes.contains_key(&start) || !self.nodes.contains_key(&goal) {
+            return Vec::new();
+        }
+
+        let mut open_set = BinaryHeap::new();
         let mut came_from: HashMap<usize, usize> = HashMap::new();
-        let mut g_score: HashMap<usize, f64> = HashMap::new();
-        let mut f_score: HashMap<usize, f64> = HashMap::new();
-        let mut open_set = priority_queue::PriorityQueue::new();
+        let mut g_score: HashMap<usize, f64> = self.nodes.keys()
+            .map(|&k| (k, f64::INFINITY))
+            .collect();
+        let mut f_score: HashMap<usize, f64> = self.nodes.keys()
+            .map(|&k| (k, f64::INFINITY))
+            .collect();
 
         g_score.insert(start, 0.0);
         f_score.insert(start, self.heuristic(start, goal));
-        open_set.push(start, std::cmp::Reverse(f_score[&start]));
+        open_set.push((-OrderedFloat(f_score[&start]), start));
 
-        while let Some((current, _)) = open_set.pop() {
+        while let Some((cost, current)) = open_set.pop() {
+            let current_f = -cost.0;
+
             if current == goal {
-                return self.reconstruct_path(&came_from, current);
+                return self.reconstruct_path_from_map(&came_from, current);
             }
 
-            if let Some(neighbours) = self.adj_list.get(&current) {
-                for &(next, weight) in neighbours {
+            if current_f > f_score[&current] {
+                continue;
+            }
+
+            if let Some(neighbors) = self.adj_list.get(&current) {
+                for &(next, weight) in neighbors {
                     let tentative_g_score = g_score[&current] + weight;
 
-                    if tentative_g_score < *g_score.get(&next).unwrap_or(&f64::INFINITY) {
+                    if tentative_g_score < g_score[&next] {
                         came_from.insert(next, current);
                         g_score.insert(next, tentative_g_score);
                         let f = tentative_g_score + self.heuristic(next, goal);
                         f_score.insert(next, f);
-                        open_set.push(next, std::cmp::Reverse(f));
+                        open_set.push((-OrderedFloat(f), next));
                     }
                 }
             }
         }
-        Vec::new() // No path found
+
+        Vec::new()  // No path found
     }
 
     fn heuristic(&self, from: usize, to: usize) -> f64 {
+        // Simple heuristic - can be improved based on your graph's properties
         1.0
     }
 
-    fn reconstruct_path(&self, came_from: &HashMap<usize, usize>, current: usize) -> Vec<usize> {
+    fn reconstruct_path(&self, previous: &HashMap<usize, Option<usize>>, start: usize) -> Vec<usize> {
+        let mut path = Vec::new();
+        let mut current = start;
+        path.push(current);
+
+        while let Some(Some(prev)) = previous.get(&current) {
+            path.push(*prev);
+            current = *prev;
+        }
+
+        path.reverse();
+        path
+    }
+
+    fn reconstruct_path_from_map(&self, came_from: &HashMap<usize, usize>, current: usize) -> Vec<usize> {
         let mut path = vec![current];
         let mut current = current;
 
@@ -168,27 +257,36 @@ impl Graph {
     }
 
     pub fn bellman_ford(&self, start: usize) -> (Vec<f64>, bool) {
+        if !self.nodes.contains_key(&start) {
+            return (Vec::new(), false);
+        }
+
         let n = self.nodes.len();
         let mut distances = vec![f64::INFINITY; n];
         distances[start] = 0.0;
 
+        // Relax edges |V| - 1 times
         for _ in 0..n-1 {
-            for (u, edges) in &self.adj_list {
+            for (&u, edges) in &self.adj_list {
                 for &(v, weight) in edges {
-                    if distances[*u] != f64::INFINITY && distances[*u] + weight < distances[v] {
-                        distances[v] = distances[*u] + weight;
+                    if distances[u] != f64::INFINITY && distances[u] + weight < distances[v] {
+                        distances[v] = distances[u] + weight;
                     }
                 }
             }
         }
 
+        // Check for negative weight cycles
         let mut has_negative_cycle = false;
-        for (u, edges) in &self.adj_list {
+        for (&u, edges) in &self.adj_list {
             for &(v, weight) in edges {
-                if distances[*u] != f64::INFINITY && distances[*u] + weight < distances[v] {
+                if distances[u] != f64::INFINITY && distances[u] + weight < distances[v] {
                     has_negative_cycle = true;
                     break;
                 }
+            }
+            if has_negative_cycle {
+                break;
             }
         }
 
@@ -196,13 +294,13 @@ impl Graph {
     }
 
     pub fn kruskal(&self) -> Vec<usize> {
-        let mut edges: Vec<(usize, usize, f64)> = Vec::new();
-        for (u, neighbours) in &self.adj_list {
-            for &(v, weight) in neighbours {
-                edges.push((*u, v, weight));
+        let mut edges = Vec::new();
+        for (&u, neighbors) in &self.adj_list {
+            for &(v, weight) in neighbors {
+                edges.push((u, v, weight));
             }
         }
-        edges.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+        edges.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut union_find = UnionFind::new(self.nodes.len());
         let mut mst = Vec::new();
@@ -214,11 +312,11 @@ impl Graph {
                 mst.push(v);
             }
         }
+
         mst
     }
 }
 
-// Union-Find data structure for Kruskal's algorithm
 struct UnionFind {
     parent: Vec<usize>,
     rank: Vec<usize>,
