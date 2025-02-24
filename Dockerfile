@@ -19,4 +19,4 @@ RUN cargo build --release
 # Expose Rocket and MPI ports
 EXPOSE 8000
 # MPI port range
-EXPOSE 10000-10100 
+EXPOSE 10000-10100
