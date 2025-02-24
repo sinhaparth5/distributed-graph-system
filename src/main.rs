@@ -6,12 +6,14 @@ use rocket::serde::json::Json;
 use rocket::{post, routes};
 use serde::{Deserialize, Serialize};
 use rocket::form::Form;
-use tempfile::NamedTempFile;
 use dristributed_graph_system::file_processor::{process_file, FileFormat, ProcessError};
+use std::env;
+use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProcessRequest {
     algorithm: String,
+    #[serde(rename = "file_format")]
     file_format: FileFormat,
     start_node: Option<usize>,
     end_node: Option<usize>,
@@ -31,7 +33,6 @@ struct UploadForm<'f> {
     request: String,
 }
 
-// Explicitly specify the lifetime parameter
 #[post("/process_file", data = "<form>")]
 async fn process_graph_file<'f>(mut form: Form<UploadForm<'f>>) -> Result<Json<ProcessResponse>, Status> {
     println!("Received request data: {}", form.request);
@@ -49,20 +50,24 @@ async fn process_graph_file<'f>(mut form: Form<UploadForm<'f>>) -> Result<Json<P
         }
     };
 
-    let temp_file = match NamedTempFile::new() {
-        Ok(file) => file,
-        Err(e) => {
-            println!("Temp file creation error: {}", e);
-            return Ok(Json(ProcessResponse {
-                result: "error".to_string(),
-                path: None,
-                distances: None,
-                error: Some("Failed to create temporary file".to_string()),
-            }));
-        }
-    };
+    // Create a temporary directory in the current directory
+    let mut temp_dir = env::current_dir()
+        .map_err(|e| {
+            println!("Failed to get current directory: {}", e);
+            Status::InternalServerError
+        })?;
+    temp_dir.push("temp");
+    std::fs::create_dir_all(&temp_dir).map_err(|e| {
+        println!("Failed to create temp directory: {}", e);
+        Status::InternalServerError
+    })?;
 
-    if let Err(e) = form.file.persist_to(temp_file.path()).await {
+    // Create temporary file path
+    let temp_file_path = temp_dir.join(format!("upload_{}.txt", uuid::Uuid::new_v4()));
+    println!("Temp file path: {:?}", temp_file_path);
+
+    // Persist the file
+    if let Err(e) = form.file.persist_to(&temp_file_path).await {
         println!("File persistence error: {}", e);
         return Ok(Json(ProcessResponse {
             result: "error".to_string(),
@@ -72,18 +77,26 @@ async fn process_graph_file<'f>(mut form: Form<UploadForm<'f>>) -> Result<Json<P
         }));
     }
 
-    match process_file_and_run_algorithm(temp_file.path().to_str().unwrap(), request) {
-        Ok(result) => Ok(Json(result)),
+    // Process the file
+    let result = match process_file_and_run_algorithm(temp_file_path.to_str().unwrap(), request) {
+        Ok(result) => result,
         Err(e) => {
             println!("Processing error: {:?}", e);
-            Ok(Json(ProcessResponse {
+            return Ok(Json(ProcessResponse {
                 result: "error".to_string(),
                 path: None,
                 distances: None,
                 error: Some(format!("Processing error: {:?}", e)),
-            }))
+            }));
         }
+    };
+
+    // Clean up
+    if let Err(e) = std::fs::remove_file(&temp_file_path) {
+        println!("Warning: Failed to remove temporary file: {}", e);
     }
+
+    Ok(Json(result))
 }
 
 fn process_file_and_run_algorithm(path: &str, request: ProcessRequest) -> Result<ProcessResponse, ProcessError> {
@@ -162,6 +175,22 @@ fn process_file_and_run_algorithm(path: &str, request: ProcessRequest) -> Result
 
 #[launch]
 fn rocket() -> _ {
+    // Create temp directory at startup
+    let temp_dir = env::current_dir()
+        .map(|mut path| {
+            path.push("temp");
+            std::fs::create_dir_all(&path).unwrap_or_else(|e| {
+                println!("Warning: Failed to create temp directory: {}", e);
+            });
+            path
+        })
+        .unwrap_or_else(|e| {
+            println!("Warning: Failed to get current directory: {}", e);
+            PathBuf::from("temp")
+        });
+
+    println!("Using temp directory: {:?}", temp_dir);
+
     let figment = rocket::Config::figment()
         .merge(("address", "0.0.0.0"))
         .merge(("port", 8000));

@@ -225,7 +225,7 @@ impl Graph {
     }
 
     fn heuristic(&self, from: usize, to: usize) -> f64 {
-        // Simple heuristic - can be improved based on your graph's properties
+        // Simple heuristic - can be improved based on graph's properties
         1.0
     }
 
