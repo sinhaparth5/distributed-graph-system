@@ -1,0 +1,60 @@
+services:
+  mpi-master:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    networks:
+        - mpi-network
+    volumes:
+      - ./temp:/app/temp
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_MCA_btl_vader_single_copy_mechanism=none
+    command: >
+      mpirun --allow-run-as-root
+      -np 1
+      -host mpi-master
+      /app/distributed-graph-system
+
+  mpi-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    networks:
+      - mpi-network
+    depends_on:
+      - mpi-master
+    volumes:
+      - ./temp:/app/temp
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_MCA_btl_vader_single_copy_mechanism=none
+    command: >
+      mpirun --allow-run-as-root
+      -np 1
+      -host mpi-worker-1
+      /app/distributed-graph-system
+
+  mpi-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    networks:
+      - mpi-network
+    depends_on:
+      - mpi-master
+    volumes:
+      - ./temp:/app/temp
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_MCA_btl_vader_single_copy_mechanism=none
+    command: >
+      mpirun --allow-run-as-root
+      -np 1
+      -host mpi-worker-2
+
+networks:
+  mpi-network:
+    driver: bridge
