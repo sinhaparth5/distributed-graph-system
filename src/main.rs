@@ -6,7 +6,7 @@ use rocket::serde::json::Json;
 use rocket::{post, routes};
 use serde::{Deserialize, Serialize};
 use rocket::form::Form;
-use dristributed_graph_system::file_processor::{process_file, FileFormat, ProcessError};
+use distributed_graph_system::file_processor::{process_file, FileFormat, ProcessError};
 use std::env;
 use std::path::PathBuf;
 
