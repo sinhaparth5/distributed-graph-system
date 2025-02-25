@@ -1,0 +1,23 @@
+[default]
+extend-ignore-re = [
+    "(?:Cargo.toml|Cargo.lock).*distributed",
+]
+
+[default.extend-words]
+MPI = "MPI"
+mpi = "mpi"
+OpenMPI = "OpenMPI"
+openmpi = "openmpi"
+hostfile = "hostfile"
+distributed-graph-system = "distributed-graph-system"
+
+[files]
+extend-exclude = [
+    "target/",
+    "temp/",
+    "*.lock",
+    "*.bin",
+    "*.svg",
+    "*.jpg",
+    "*.png"
+]

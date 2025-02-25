@@ -1,0 +1,83 @@
+name: Code Quality
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
+
+env:
+    CARGO_TERM_COLOR: always
+
+jobs:
+    lint:
+        name: Lint and Style Check
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Install Rust
+              uses: actions-rs/toolchain@v1
+              with:
+                profile: minimal
+                toolchain: stable
+                override: true
+                components: rustfmt, clippy
+
+            - name: Cache dependencies
+              uses: actions/cache@v3
+              with:
+                path: |
+                    ~/.cargo/registry
+                    ~/.cargo/git
+                    target
+                key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+            - name: Check formatting
+              uses: actions-rs/cargo@v1
+              with:
+                command: fmt
+                args: --all -- --check
+
+            - name: Run Clippy
+              uses: actions-rs/clippy-check@v1
+              with:
+                token: ${{ secrets.GITHUB_TOKEN }}
+                args: -- -D warnings
+    
+    # test:
+    #     name: Run Tests
+    #     runs-on: ubuntu-latest
+    #     steps:
+    #         - uses: actions/checkout@v4
+
+    #         - name: Install Rust
+    #           uses: actions-rs/toolchain@v1
+    #           with:
+    #             profile: minimal
+    #             toolchain: stable
+    #             override: true
+
+    #         - name: Install OpenMPI
+    #           run: |
+    #             sudo apt-get update
+    #             sudo apt-get install -y libopenmpi-dev opne
+
+    security-audit:
+        name: Security Audit
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v3
+            
+            - name: Install Rust
+              uses: actions-rs/toolchain@v1
+              with:
+                profile: minimal
+                toolchain: stable
+                override: true
+            
+            - name: Install cargo-audit
+              run: cargo install cargo-audit
+                
+            - name: Run security audit
+              run: cargo audit
