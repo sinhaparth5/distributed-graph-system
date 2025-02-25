@@ -6,8 +6,8 @@
   <img src="https://img.shields.io/badge/Built_with-Rust-orange" width="90" alt="Distributed Graph Processing">
   <img src="https://img.shields.io/badge/MPI-Parallelized-brightgreen" width="90" alt="Distributed Graph Processing">
   <img src="https://img.shields.io/badge/Docker-Ready-blue" width="90" alt="Distributed Graph Processing">
-  <img src="https://github.com/parthsinhabrookes/distributed-graph-system/workflows/Code%20Quality/badge.svg" width="90" alt="Distributed Graph Processing">
-  <img src="https://github.com/parthsinhabrookes/distributed-graph-system/workflows/Spelling%20Check/badge.svg" width="90" alt="Distributed Graph Processing">
+  <img src="https://github.com/parthsinhabrookes/distributed-graph-system/workflows/Code%20Quality/badge.svg" width="130" alt="Distributed Graph Processing">
+  <img src="https://github.com/parthsinhabrookes/distributed-graph-system/workflows/Spelling%20Check/badge.svg" width="130" alt="Distributed Graph Processing">
 </p>
 </div>
 
