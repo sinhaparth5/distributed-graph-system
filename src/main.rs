@@ -6,7 +6,8 @@ use rocket::serde::json::Json;
 use rocket::{post, routes};
 use serde::{Deserialize, Serialize};
 use rocket::form::Form;
-use distributed_graph_system::file_processor::{process_file, FileFormat, ProcessError};
+use distributed_graph_system::file_processor::{FileFormat, ProcessError};
+use distributed_graph_system::distributed_processor::run_distributed_algorithm;
 use std::env;
 use std::path::PathBuf;
 
@@ -77,17 +78,46 @@ async fn process_graph_file<'f>(mut form: Form<UploadForm<'f>>) -> Result<Json<P
         }));
     }
 
-    // Process the file
-    let result = match process_file_and_run_algorithm(temp_file_path.to_str().unwrap(), request) {
-        Ok(result) => result,
+    // Process the file using the distributed system
+    let result = match run_distributed_algorithm(
+        temp_file_path.to_str().unwrap(),
+        &request.algorithm,
+        request.file_format,
+        request.start_node,
+        request.end_node
+    ) {
+        Ok(task_result) => {
+            let message = match request.algorithm.as_str() {
+                "dfs" => "DFS completed".to_string(),
+                "bfs" => "BFS completed".to_string(),
+                "dijkstra" => "Dijkstra completed".to_string(),
+                "astar" => "A* completed".to_string(),
+                "bellman-ford" => {
+                    if task_result.has_negative_cycle.unwrap_or(false) {
+                        "Negative cycle detected".to_string()
+                    } else {
+                        "Bellman-Ford completed".to_string()
+                    }
+                },
+                "kruskal" => "Kruskal's MST completed".to_string(),
+                _ => "Algorithm completed".to_string(),
+            };
+
+            ProcessResponse {
+                result: message,
+                path: task_result.path,
+                distances: task_result.distances,
+                error: None,
+            }
+        },
         Err(e) => {
-            println!("Processing error: {:?}", e);
-            return Ok(Json(ProcessResponse {
+            println!("Processing error: {}", e);
+            ProcessResponse {
                 result: "error".to_string(),
                 path: None,
                 distances: None,
-                error: Some(format!("Processing error: {:?}", e)),
-            }));
+                error: Some(format!("Processing error: {}", e)),
+            }
         }
     };
 
@@ -97,80 +127,6 @@ async fn process_graph_file<'f>(mut form: Form<UploadForm<'f>>) -> Result<Json<P
     }
 
     Ok(Json(result))
-}
-
-fn process_file_and_run_algorithm(path: &str, request: ProcessRequest) -> Result<ProcessResponse, ProcessError> {
-    let graph = process_file(path, request.file_format)?;
-
-    let result = match request.algorithm.as_str() {
-        "dfs" => {
-            let start = request.start_node.unwrap_or(0);
-            let path = graph.dfs(start);
-            ProcessResponse {
-                result: "DFS completed".to_string(),
-                path: Some(path),
-                distances: None,
-                error: None,
-            }
-        },
-        "bfs" => {
-            let start = request.start_node.unwrap_or(0);
-            let path = graph.bfs(start);
-            ProcessResponse {
-                result: "BFS completed".to_string(),
-                path: Some(path),
-                distances: None,
-                error: None,
-            }
-        },
-        "dijkstra" => {
-            let start = request.start_node.unwrap_or(0);
-            let (distances, path) = graph.dijkstra(start);
-            ProcessResponse {
-                result: "Dijkstra completed".to_string(),
-                path: Some(path),
-                distances: Some(distances),
-                error: None,
-            }
-        },
-        "astar" => {
-            let start = request.start_node.unwrap_or(0);
-            let end = request.end_node.ok_or(ProcessError::ParsingError("End node required for A*".to_string()))?;
-            let path = graph.astar(start, end);
-            ProcessResponse {
-                result: "A* completed".to_string(),
-                path: Some(path),
-                distances: None,
-                error: None,
-            }
-        },
-        "bellman-ford" => {
-            let start = request.start_node.unwrap_or(0);
-            let (distances, has_negative_cycle) = graph.bellman_ford(start);
-            ProcessResponse {
-                result: if has_negative_cycle {
-                    "Negative cycle detected".to_string()
-                } else {
-                    "Bellman-Ford completed".to_string()
-                },
-                path: None,
-                distances: Some(distances),
-                error: None,
-            }
-        },
-        "kruskal" => {
-            let mst = graph.kruskal();
-            ProcessResponse {
-                result: "Kruskal's MST completed".to_string(),
-                path: Some(mst),
-                distances: None,
-                error: None,
-            }
-        },
-        _ => return Err(ProcessError::InvalidFormat),
-    };
-
-    Ok(result)
 }
 
 #[launch]
