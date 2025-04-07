@@ -3,20 +3,38 @@
 use rocket::fs::TempFile;
 use rocket::http::Status;
 use rocket::serde::json::Json;
-use rocket::{post, routes, options};
 use rocket::fairing::{Fairing, Info, Kind};
 use rocket::http::Header;
 use rocket::{Request, Response};
-use serde::{Deserialize, Serialize};
 use rocket::form::Form;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+// Import necessary items
 use distributed_graph_system::file_processor::{FileFormat, ProcessError};
 use distributed_graph_system::distributed_processor::run_distributed_algorithm;
-use std::env;
-use std::path::PathBuf;
 
 // CORS Fairing
 pub struct CORS;
 
+#[rocket::async_trait]
+impl Fairing for CORS {
+    fn info(&self) -> Info {
+        Info {
+            name: "Add CORS headers to responses",
+            kind: Kind::Response
+        }
+    }
+
+    async fn on_response<'r>(&self, _request: &'r Request<'_>, response: &mut Response<'r>) {
+        response.set_header(Header::new("Access-Control-Allow-Origin", "*"));
+        response.set_header(Header::new("Access-Control-Allow-Methods", "POST, GET, OPTIONS"));
+        response.set_header(Header::new("Access-Control-Allow-Headers", "*"));
+        response.set_header(Header::new("Access-Control-Allow-Credentials", "true"));
+    }
+}
+
+// Request and response structures
 #[derive(Debug, Serialize, Deserialize)]
 struct ProcessRequest {
     algorithm: String,
@@ -40,23 +58,6 @@ struct UploadForm<'f> {
     request: String,
 }
 
-#[rocket::async_trait]
-impl Fairing for CORS {
-    fn info(&self) -> Info {
-        Info {
-            name: "Add CORS headers to responses",
-            kind: Kind::Response
-        }
-    }
-
-    async fn on_response<'r>(&self, _request: &'r Request<'_>, response: &mut Response<'r>) {
-        response.set_header(Header::new("Access-Control-Allow-Origin", "*"));
-        response.set_header(Header::new("Access-Control-Allow-Methods", "POST, GET, OPTIONS"));
-        response.set_header(Header::new("Access-Control-Allow-Headers", "*"));
-        response.set_header(Header::new("Access-Control-Allow-Credentials", "true"));
-    }
-}
-
 // Catch OPTIONS requests for CORS preflight
 #[options("/<_..>")]
 fn options() -> &'static str {
@@ -67,6 +68,12 @@ fn options() -> &'static str {
 #[get("/health")]
 fn health_check() -> &'static str {
     "OK"
+}
+
+// Root endpoint
+#[get("/")]
+fn index() -> &'static str {
+    "Distributed Graph Processing API"
 }
 
 #[post("/process_file", data = "<form>")]
@@ -87,7 +94,7 @@ async fn process_graph_file<'f>(mut form: Form<UploadForm<'f>>) -> Result<Json<P
     };
 
     // Use /tmp directory which is guaranteed to be writable
-    let temp_dir = std::path::PathBuf::from("/tmp");
+    let temp_dir = PathBuf::from("/tmp");
     
     // Create temporary file path with UUID to avoid conflicts
     let filename = format!("graph_upload_{}.txt", uuid::Uuid::new_v4());
@@ -159,23 +166,8 @@ async fn process_graph_file<'f>(mut form: Form<UploadForm<'f>>) -> Result<Json<P
 
 #[launch]
 fn rocket() -> _ {
-    // Create temp directory at startup
-    let temp_dir = env::current_dir()
-        .map(|mut path| {
-            path.push("temp");
-            std::fs::create_dir_all(&path).unwrap_or_else(|e| {
-                println!("Warning: Failed to create temp directory: {}", e);
-            });
-            path
-        })
-        .unwrap_or_else(|e| {
-            println!("Warning: Failed to get current directory: {}", e);
-            PathBuf::from("temp")
-        });
-
-    println!("Using temp directory: {:?}", temp_dir);
     println!("Starting Rocket server on 0.0.0.0:8000...");
-
+    
     // Configure Rocket
     let figment = rocket::Config::figment()
         .merge(("address", "0.0.0.0"))
@@ -184,5 +176,5 @@ fn rocket() -> _ {
 
     rocket::custom(figment)
         .attach(CORS)
-        .mount("/", routes![process_graph_file, options, health_check])
+        .mount("/", routes![index, health_check, process_graph_file, options])
 }

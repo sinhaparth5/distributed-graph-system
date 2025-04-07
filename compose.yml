@@ -1,0 +1,41 @@
+services:
+  mpi-master:
+    build: .
+    volumes:
+      - ./:/app
+      - ./temp:/app/temp  # Explicit volume for temp files
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+      - NODE_ROLE=master
+    ports:
+      - "8000:8000"
+    hostname: mpi-master
+    networks:
+      - mpi-network
+    extra_hosts:
+      - "mpi-worker:172.28.1.3"
+
+  mpi-worker:
+    build: .
+    volumes:
+      - ./:/app
+      - ./temp:/app/temp  # Explicit volume for temp files
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+      - NODE_ROLE=worker
+    depends_on:
+      - mpi-master
+    hostname: mpi-worker
+    networks:
+      - mpi-network
+    extra_hosts:
+      - "mpi-master:172.28.1.2"
+
+networks:
+  mpi-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.1.0/24

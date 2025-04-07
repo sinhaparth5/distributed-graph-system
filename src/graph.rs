@@ -75,6 +75,32 @@ impl Graph {
         self.nodes.get(&id)
     }
 
+    pub fn get_nodes(&self) -> &HashMap<usize, Node> {
+        &self.nodes
+    }
+
+    pub fn get_node_cloned(&self, id: usize) -> Option<Node> {
+        self.nodes.get(&id).cloned()
+    }
+
+    pub fn get_all_nodes_ids(&self) -> Vec<usize> {
+        self.nodes.keys().cloned().collect()
+    }
+
+    pub fn get_all_edges(&self) -> Vec<Edge> {
+        let mut edges = Vec::new();
+        for (&from, neighbors) in &self.adj_list {
+            for &(to, weight) in neighbors {
+                edges.push(Edge {
+                    from,
+                    to,
+                    weight,
+                });
+            }
+        }
+        edges
+    }
+
     pub fn get_neighbors(&self, id: usize) -> Option<&Vec<(usize, f64)>> {
         self.adj_list.get(&id)
     }

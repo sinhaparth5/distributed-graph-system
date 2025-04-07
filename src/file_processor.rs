@@ -5,7 +5,7 @@ use crate::graph::{Graph, Node, Edge};
 
 // Add both Serialize and Deserialize derives
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]  // This helps with JSON compatibility
+#[serde(rename_all = "camelCase")] 
 pub enum FileFormat {
     EdgeList,
     AdjacencyList,
