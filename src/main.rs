@@ -3,13 +3,19 @@
 use rocket::fs::TempFile;
 use rocket::http::Status;
 use rocket::serde::json::Json;
-use rocket::{post, routes};
+use rocket::{post, routes, options};
+use rocket::fairing::{Fairing, Info, Kind};
+use rocket::http::Header;
+use rocket::{Request, Response};
 use serde::{Deserialize, Serialize};
 use rocket::form::Form;
 use distributed_graph_system::file_processor::{FileFormat, ProcessError};
 use distributed_graph_system::distributed_processor::run_distributed_algorithm;
 use std::env;
 use std::path::PathBuf;
+
+// CORS Fairing
+pub struct CORS;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProcessRequest {
@@ -34,6 +40,35 @@ struct UploadForm<'f> {
     request: String,
 }
 
+#[rocket::async_trait]
+impl Fairing for CORS {
+    fn info(&self) -> Info {
+        Info {
+            name: "Add CORS headers to responses",
+            kind: Kind::Response
+        }
+    }
+
+    async fn on_response<'r>(&self, _request: &'r Request<'_>, response: &mut Response<'r>) {
+        response.set_header(Header::new("Access-Control-Allow-Origin", "*"));
+        response.set_header(Header::new("Access-Control-Allow-Methods", "POST, GET, OPTIONS"));
+        response.set_header(Header::new("Access-Control-Allow-Headers", "*"));
+        response.set_header(Header::new("Access-Control-Allow-Credentials", "true"));
+    }
+}
+
+// Catch OPTIONS requests for CORS preflight
+#[options("/<_..>")]
+fn options() -> &'static str {
+    ""
+}
+
+// Basic health check endpoint
+#[get("/health")]
+fn health_check() -> &'static str {
+    "OK"
+}
+
 #[post("/process_file", data = "<form>")]
 async fn process_graph_file<'f>(mut form: Form<UploadForm<'f>>) -> Result<Json<ProcessResponse>, Status> {
     println!("Received request data: {}", form.request);
@@ -51,21 +86,14 @@ async fn process_graph_file<'f>(mut form: Form<UploadForm<'f>>) -> Result<Json<P
         }
     };
 
-    // Create a temporary directory in the current directory
-    let mut temp_dir = env::current_dir()
-        .map_err(|e| {
-            println!("Failed to get current directory: {}", e);
-            Status::InternalServerError
-        })?;
-    temp_dir.push("temp");
-    std::fs::create_dir_all(&temp_dir).map_err(|e| {
-        println!("Failed to create temp directory: {}", e);
-        Status::InternalServerError
-    })?;
-
-    // Create temporary file path
-    let temp_file_path = temp_dir.join(format!("upload_{}.txt", uuid::Uuid::new_v4()));
-    println!("Temp file path: {:?}", temp_file_path);
+    // Use /tmp directory which is guaranteed to be writable
+    let temp_dir = std::path::PathBuf::from("/tmp");
+    
+    // Create temporary file path with UUID to avoid conflicts
+    let filename = format!("graph_upload_{}.txt", uuid::Uuid::new_v4());
+    let temp_file_path = temp_dir.join(&filename);
+    
+    println!("Will save file to: {:?}", temp_file_path);
 
     // Persist the file
     if let Err(e) = form.file.persist_to(&temp_file_path).await {
@@ -74,7 +102,7 @@ async fn process_graph_file<'f>(mut form: Form<UploadForm<'f>>) -> Result<Json<P
             result: "error".to_string(),
             path: None,
             distances: None,
-            error: Some("Failed to save uploaded file".to_string()),
+            error: Some(format!("Failed to save uploaded file: {}", e)),
         }));
     }
 
@@ -146,20 +174,15 @@ fn rocket() -> _ {
         });
 
     println!("Using temp directory: {:?}", temp_dir);
+    println!("Starting Rocket server on 0.0.0.0:8000...");
 
+    // Configure Rocket
     let figment = rocket::Config::figment()
         .merge(("address", "0.0.0.0"))
-        .merge(("port", 8000));
-
-    let cors = rocket::fairing::AdHoc::on_response("CORS", |_, res| {
-        Box::pin(async move {
-            res.set_header(rocket::http::Header::new("Access-Control-Allow-Origin", "*"));
-            res.set_header(rocket::http::Header::new("Access-Control-Allow-Methods", "POST, GET, OPTIONS"));
-            res.set_header(rocket::http::Header::new("Access-Control-Allow-Headers", "*"));
-        })
-    });
+        .merge(("port", 8000))
+        .merge(("log_level", "normal"));
 
     rocket::custom(figment)
-        .attach(cors)
-        .mount("/", routes![process_graph_file])
+        .attach(CORS)
+        .mount("/", routes![process_graph_file, options, health_check])
 }
