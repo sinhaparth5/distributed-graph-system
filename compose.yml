@@ -1,60 +1,39 @@
 services:
   mpi-master:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
+    volumes:
+      - ./:/app
+      - ./temp:/app/temp  # Explicit volume for temp files
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
     ports:
       - "8000:8000"
-    networks:
-        - mpi-network
-    volumes:
-      - ./temp:/app/temp
-    environment:
-      - OMPI_ALLOW_RUN_AS_ROOT=1
-      - OMPI_MCA_btl_vader_single_copy_mechanism=none
-    command: >
-      mpirun --allow-run-as-root
-      -np 1
-      -host mpi-master
-      /app/distributed-graph-system
-
-  mpi-worker-1:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    hostname: mpi-master
     networks:
       - mpi-network
-    depends_on:
-      - mpi-master
+    extra_hosts:
+      - "mpi-worker:172.28.1.3"
+
+  mpi-worker:
+    build: .
     volumes:
-      - ./temp:/app/temp
+      - ./:/app
+      - ./temp:/app/temp  # Explicit volume for temp files
     environment:
       - OMPI_ALLOW_RUN_AS_ROOT=1
-      - OMPI_MCA_btl_vader_single_copy_mechanism=none
-    command: >
-      mpirun --allow-run-as-root
-      -np 1
-      -host mpi-worker-1
-      /app/distributed-graph-system
-
-  mpi-worker-2:
-    build:
-      context: .
-      dockerfile: Dockerfile
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+    depends_on:
+      - mpi-master
+    hostname: mpi-worker
     networks:
       - mpi-network
-    depends_on:
-      - mpi-master
-    volumes:
-      - ./temp:/app/temp
-    environment:
-      - OMPI_ALLOW_RUN_AS_ROOT=1
-      - OMPI_MCA_btl_vader_single_copy_mechanism=none
-    command: >
-      mpirun --allow-run-as-root
-      -np 1
-      -host mpi-worker-2
+    extra_hosts:
+      - "mpi-master:172.28.1.2"
 
 networks:
   mpi-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.1.0/24
