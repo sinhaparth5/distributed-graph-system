@@ -7,6 +7,7 @@ services:
     environment:
       - OMPI_ALLOW_RUN_AS_ROOT=1
       - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+      - NODE_ROLE=master
     ports:
       - "8000:8000"
     hostname: mpi-master
@@ -23,6 +24,7 @@ services:
     environment:
       - OMPI_ALLOW_RUN_AS_ROOT=1
       - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+      - NODE_ROLE=worker
     depends_on:
       - mpi-master
     hostname: mpi-worker

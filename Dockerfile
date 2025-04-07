@@ -46,8 +46,25 @@ WORKDIR /app
 # Expose SSH and Rocket web server ports
 EXPOSE 22 8000
 
-# Set up supervisor to manage services
-COPY supervisor.conf /etc/supervisor/conf.d/supervisor.conf
+# Copy both supervisor configurations
+COPY supervisor-master.conf /etc/supervisor/conf.d/supervisor-master.conf
+COPY supervisor-worker.conf /etc/supervisor/conf.d/supervisor-worker.conf
 
-# Run supervisor as the entrypoint
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
+# Create startup script to select appropriate config based on NODE_ROLE
+RUN echo '#!/bin/bash\n\
+if [ "$NODE_ROLE" = "master" ]; then\n\
+    echo "Starting as master node with web server"\n\
+    cp /etc/supervisor/conf.d/supervisor-master.conf /etc/supervisor/conf.d/supervisor.conf\n\
+else\n\
+    echo "Starting as worker node without web server"\n\
+    cp /etc/supervisor/conf.d/supervisor-worker.conf /etc/supervisor/conf.d/supervisor.conf\n\
+fi\n\
+\n\
+/usr/bin/supervisord -c /etc/supervisor/supervisord.conf\n'\
+> /start.sh
+
+# Make the startup script executable
+RUN chmod +x /start.sh
+
+# Run the startup script as the entrypoint
+CMD ["/start.sh"]
