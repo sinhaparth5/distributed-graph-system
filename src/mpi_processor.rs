@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use bincode::{serialize, deserialize};
 use mpi::environment::Threading;
 
-use crate::graph::{Graph, Edge, Node};
+use crate::graph::{Graph, Edge, Node, NodeFeatures};
 use std::collections::{HashMap, HashSet};
 
 // Serializable message types for MPI communication
@@ -26,13 +26,6 @@ pub struct GraphTask {
     pub graph_partition: GraphPartition,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct GraphPartition {
-    pub nodes: Vec<Node>,
-    pub edges: Vec<Edge>,
-    pub node_range: (usize, usize),
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TaskResult {
     pub path: Option<Vec<usize>>,
@@ -40,7 +33,29 @@ pub struct TaskResult {
     pub has_negative_cycle: Option<bool>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GraphPartition {
+    pub nodes: Vec<Node>,
+    pub edges: Vec<Edge>,
+    pub node_range: (usize, usize),
+    pub node_features: HashMap<usize, Vec<f64>>,
+    pub feature_descriptions: HashMap<usize, String>,
+    pub ego_features: HashMap<usize, Vec<f64>>,
+}
+
 impl GraphPartition {
+    // Create a new empty partition
+    pub fn new() -> Self {
+        GraphPartition {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            node_range: (0, 0),
+            node_features: HashMap::new(),
+            feature_descriptions: HashMap::new(),
+            ego_features: HashMap::new(),
+        }
+    }
+
     pub fn to_graph(&self) -> Graph {
         let mut graph = Graph::new();
 
@@ -49,13 +64,29 @@ impl GraphPartition {
             graph.add_node(node.clone());
         }
 
+        // Add all edges
         for edge in &self.edges {
             graph.add_edge(edge.clone());
         }
+        
+        // Add node features if any
+        if !self.node_features.is_empty() {
+            graph.set_node_features(NodeFeatures::VectorPerNode(self.node_features.clone()));
+        }
+        
+        // Add feature descriptions if any
+        if !self.feature_descriptions.is_empty() {
+            graph.set_feature_descriptions(self.feature_descriptions.clone());
+        }
+        
+        // Add ego features if any
+        if !self.ego_features.is_empty() {
+            graph.set_ego_features(self.ego_features.clone());
+        }
+        
         graph
     }
 }
-
 // Internal enum to represent our execution mode
 enum ExecutionMode {
     Distributed {
@@ -156,7 +187,33 @@ impl MPIProcessor {
         let node_ids: Vec<usize> = graph.get_nodes().keys().cloned().collect();
         let total_nodes = node_ids.len();
         
-        // For single process mode, just return one partition with all nodes
+        // Initialize empty collections for features
+        let mut all_node_features = HashMap::new();
+        let mut feature_descriptions = HashMap::new();
+        let mut ego_features = HashMap::new();
+        
+        // Extract node features for all nodes
+        for &node_id in &node_ids {
+            if let Some(features) = graph.get_node_features(node_id) {
+                all_node_features.insert(node_id, features);
+            }
+        }
+        
+        // Collect feature descriptions - These would typically come from get_feature_description(id)
+        for feature_id in 0..1000 { // Use a reasonable upper bound or determine dynamically
+            if let Some(desc) = graph.get_feature_description(feature_id) {
+                feature_descriptions.insert(feature_id, desc.clone());
+            }
+        }
+        
+        // Collect ego features - typically for node 0 or specified ego nodes
+        for ego_id in &[0] { // Adjust based on your data model
+            if let Some(features) = graph.get_ego_features(*ego_id) {
+                ego_features.insert(*ego_id, features.clone());
+            }
+        }
+        
+        // For single process mode, just return one partition with all nodes and features
         if let ExecutionMode::SingleProcess = self.mode {
             let all_node_ids: HashSet<usize> = node_ids.iter().cloned().collect();
             let all_nodes: Vec<Node> = all_node_ids
@@ -169,6 +226,9 @@ impl MPIProcessor {
                 nodes: all_nodes,
                 edges: all_edges,
                 node_range: (0, total_nodes),
+                node_features: all_node_features,
+                feature_descriptions,
+                ego_features,
             }];
         }
         
@@ -200,11 +260,22 @@ impl MPIProcessor {
             // Get all edges where at least one endpoint is in this partition
             let partition_edges: Vec<Edge> = self.get_edges_for_partition(graph, &partition_node_ids);
             
+            // Extract features for nodes in this partition
+            let mut partition_features = HashMap::new();
+            for &node_id in &partition_node_ids {
+                if let Some(features) = all_node_features.get(&node_id) {
+                    partition_features.insert(node_id, features.clone());
+                }
+            }
+            
             // Create the partition
             partitions.push(GraphPartition {
                 nodes: partition_nodes,
                 edges: partition_edges,
                 node_range: (start_idx, end_idx),
+                node_features: partition_features,
+                feature_descriptions: feature_descriptions.clone(),
+                ego_features: ego_features.clone(),
             });
         }
         
