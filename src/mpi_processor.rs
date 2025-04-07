@@ -4,6 +4,7 @@ use mpi::traits::*;
 use mpi::{self, request::WaitGuard};
 use serde::{Deserialize, Serialize};
 use bincode::{serialize, deserialize};
+use mpi::environment::Threading;
 
 use crate::graph::{Graph, Edge, Node};
 use std::collections::{HashMap, HashSet};
@@ -72,14 +73,16 @@ pub struct MPIProcessor {
 
 impl MPIProcessor {
     pub fn new() -> Self {
-        // Try to initialize MPI, but fall back to single process if it fails
-        match mpi::initialize() {
-            Some(universe) => {
+        // Try to initialize MPI with thread support first, then fall back
+        println!("Initializing MPI processor...");
+        
+        match mpi::initialize_with_threading(Threading::Multiple) {
+            Some((universe, provided_threading)) => {
                 let world = universe.world();
                 let rank = world.rank();
                 let size = world.size();
                 
-                println!("MPI initialized successfully: {} processes", size);
+                println!("MPI initialized successfully: {} processes with thread support level: {:?}", size, provided_threading);
                 
                 MPIProcessor {
                     mode: ExecutionMode::Distributed {
@@ -91,16 +94,41 @@ impl MPIProcessor {
                 }
             },
             None => {
-                // MPI initialization failed - create a single-process environment
-                println!("WARNING: MPI initialization failed. Running in single-process mode!");
+                // MPI initialization with thread support failed - try without thread support
+                println!("WARNING: MPI initialization with thread support failed");
+                println!("Trying without thread support...");
                 
-                MPIProcessor {
-                    mode: ExecutionMode::SingleProcess,
+                match mpi::initialize() {
+                    Some(universe) => {
+                        let world = universe.world();
+                        let rank = world.rank();
+                        let size = world.size();
+                        
+                        println!("MPI initialized successfully: {} processes", size);
+                        
+                        MPIProcessor {
+                            mode: ExecutionMode::Distributed {
+                                universe,
+                                world,
+                                rank,
+                                size,
+                            },
+                        }
+                    },
+                    None => {
+                        // MPI initialization failed - create a single-process environment
+                        println!("WARNING: MPI initialization failed. Running in single-process mode!");
+                        println!("To debug MPI issues, run 'cargo run --bin mpi_test'");
+                        
+                        MPIProcessor {
+                            mode: ExecutionMode::SingleProcess,
+                        }
+                    }
                 }
             }
         }
     }
-
+    
     pub fn is_master(&self) -> bool {
         match &self.mode {
             ExecutionMode::Distributed { rank, .. } => *rank == 0,
