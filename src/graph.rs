@@ -16,6 +16,14 @@ pub struct Edge {
     pub weight: f64,
 }
 
+// Add NodeFeatures enum to represent different feature storage options
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum NodeFeatures {
+    None,
+    VectorPerNode(HashMap<usize, Vec<f64>>),
+    SparseFeatures(HashMap<usize, HashMap<usize, f64>>),
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 struct OrderedFloat(f64);
 
@@ -44,6 +52,9 @@ impl Neg for OrderedFloat {
 pub struct Graph {
     nodes: HashMap<usize, Node>,
     adj_list: HashMap<usize, Vec<(usize, f64)>>,
+    node_features: NodeFeatures,
+    feature_descriptions: HashMap<usize, String>,
+    ego_features: HashMap<usize, Vec<f64>>,
 }
 
 impl Graph {
@@ -51,6 +62,9 @@ impl Graph {
         Graph {
             nodes: HashMap::new(),
             adj_list: HashMap::new(),
+            node_features: NodeFeatures::None,
+            feature_descriptions: HashMap::new(),
+            ego_features: HashMap::new(),
         }
     }
 
@@ -69,6 +83,90 @@ impl Graph {
             .entry(edge.from)
             .or_insert(Vec::new())
             .push((edge.to, edge.weight));
+    }
+
+    // New method to check if a node exists
+    pub fn has_node(&self, id: usize) -> bool {
+        self.nodes.contains_key(&id)
+    }
+
+    // Method to set node features
+    pub fn set_node_features(&mut self, features: NodeFeatures) {
+        self.node_features = features;
+    }
+
+    // Method to set feature descriptions
+    pub fn set_feature_descriptions(&mut self, descriptions: HashMap<usize, String>) {
+        self.feature_descriptions = descriptions;
+    }
+
+    // Method to set ego features
+    pub fn set_ego_features(&mut self, features: HashMap<usize, Vec<f64>>) {
+        self.ego_features = features;
+    }
+
+    // Method to merge another graph into this one
+    pub fn merge(&mut self, other: Graph) {
+        // Merge nodes
+        for (id, node) in other.nodes {
+            if !self.nodes.contains_key(&id) {
+                self.add_node(node);
+            }
+        }
+
+        // Merge edges
+        for (from, neighbors) in other.adj_list {
+            for (to, weight) in neighbors {
+                self.add_edge(Edge { from, to, weight });
+            }
+        }
+
+        // Merge features based on type
+        match other.node_features {
+            NodeFeatures::None => {}
+            NodeFeatures::VectorPerNode(features) => {
+                match &mut self.node_features {
+                    NodeFeatures::None => {
+                        self.node_features = NodeFeatures::VectorPerNode(features);
+                    }
+                    NodeFeatures::VectorPerNode(existing_features) => {
+                        for (id, vector) in features {
+                            existing_features.insert(id, vector);
+                        }
+                    }
+                    NodeFeatures::SparseFeatures(_) => {
+                        // Convert and merge if needed
+                        println!("Warning: Cannot merge different feature types");
+                    }
+                }
+            }
+            NodeFeatures::SparseFeatures(features) => {
+                match &mut self.node_features {
+                    NodeFeatures::None => {
+                        self.node_features = NodeFeatures::SparseFeatures(features);
+                    }
+                    NodeFeatures::SparseFeatures(existing_features) => {
+                        for (id, feature_map) in features {
+                            existing_features.insert(id, feature_map);
+                        }
+                    }
+                    NodeFeatures::VectorPerNode(_) => {
+                        // Convert and merge if needed
+                        println!("Warning: Cannot merge different feature types");
+                    }
+                }
+            }
+        }
+
+        // Merge feature descriptions
+        for (id, desc) in other.feature_descriptions {
+            self.feature_descriptions.insert(id, desc);
+        }
+
+        // Merge ego features
+        for (id, features) in other.ego_features {
+            self.ego_features.insert(id, features);
+        }
     }
 
     pub fn get_node(&self, id: usize) -> Option<&Node> {
@@ -103,6 +201,37 @@ impl Graph {
 
     pub fn get_neighbors(&self, id: usize) -> Option<&Vec<(usize, f64)>> {
         self.adj_list.get(&id)
+    }
+
+    // Method to get node features
+    pub fn get_node_features(&self, id: usize) -> Option<Vec<f64>> {
+        match &self.node_features {
+            NodeFeatures::None => None,
+            NodeFeatures::VectorPerNode(features) => features.get(&id).cloned(),
+            NodeFeatures::SparseFeatures(features) => {
+                if let Some(sparse_features) = features.get(&id) {
+                    // Convert sparse to dense if needed
+                    let max_feature_id = sparse_features.keys().max().unwrap_or(&0);
+                    let mut dense = vec![0.0; max_feature_id + 1];
+                    for (&feat_id, &value) in sparse_features {
+                        dense[feat_id] = value;
+                    }
+                    Some(dense)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    // Method to get feature description
+    pub fn get_feature_description(&self, feature_id: usize) -> Option<&String> {
+        self.feature_descriptions.get(&feature_id)
+    }
+
+    // Method to get ego features
+    pub fn get_ego_features(&self, ego_id: usize) -> Option<&Vec<f64>> {
+        self.ego_features.get(&ego_id)
     }
 
     pub fn dfs(&self, start: usize) -> Vec<usize> {
