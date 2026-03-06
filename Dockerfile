@@ -46,6 +46,9 @@ WORKDIR /app
 # Expose SSH and Rocket web server ports
 EXPOSE 22 8000
 
+# MPI hostfile — used by mpirun on the master to locate worker processes
+COPY hostfile /etc/mpi-hostfile
+
 # Copy both supervisor configurations
 COPY supervisor-master.conf /etc/supervisor/conf.d/supervisor-master.conf
 COPY supervisor-worker.conf /etc/supervisor/conf.d/supervisor-worker.conf

@@ -1,40 +1,38 @@
 #[macro_use] extern crate rocket;
 
 use rocket::fs::TempFile;
-use rocket::http::Status;
 use rocket::serde::json::Json;
 use rocket::fairing::{Fairing, Info, Kind};
 use rocket::http::Header;
-use rocket::{Request, Response};
+use rocket::{Request, Response, State};
 use rocket::form::Form;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
 
-// Import necessary items
-use distributed_graph_system::file_processor::{FileFormat, ProcessError};
+use distributed_graph_system::file_processor::FileFormat;
 use distributed_graph_system::distributed_processor::run_distributed_algorithm;
+use distributed_graph_system::mpi_processor::MPIProcessor;
 
-// CORS Fairing
+// ── CORS ─────────────────────────────────────────────────────────────────────
+
 pub struct CORS;
 
 #[rocket::async_trait]
 impl Fairing for CORS {
     fn info(&self) -> Info {
-        Info {
-            name: "Add CORS headers to responses",
-            kind: Kind::Response
-        }
+        Info { name: "CORS", kind: Kind::Response }
     }
-
-    async fn on_response<'r>(&self, _request: &'r Request<'_>, response: &mut Response<'r>) {
-        response.set_header(Header::new("Access-Control-Allow-Origin", "*"));
-        response.set_header(Header::new("Access-Control-Allow-Methods", "POST, GET, OPTIONS"));
-        response.set_header(Header::new("Access-Control-Allow-Headers", "*"));
-        response.set_header(Header::new("Access-Control-Allow-Credentials", "true"));
+    async fn on_response<'r>(&self, _req: &'r Request<'_>, res: &mut Response<'r>) {
+        res.set_header(Header::new("Access-Control-Allow-Origin", "*"));
+        res.set_header(Header::new("Access-Control-Allow-Methods", "POST, GET, OPTIONS"));
+        res.set_header(Header::new("Access-Control-Allow-Headers", "*"));
+        res.set_header(Header::new("Access-Control-Allow-Credentials", "true"));
     }
 }
 
-// Request and response structures
+// ── Types ────────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ProcessRequest {
     algorithm: String,
@@ -50,6 +48,16 @@ struct ProcessResponse {
     path: Option<Vec<usize>>,
     distances: Option<Vec<f64>>,
     error: Option<String>,
+    mpi_processes: usize,
+    mpi_mode: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MpiStatusResponse {
+    mpi_processes: usize,
+    mpi_mode: String,
+    master_rank: i32,
+    note: String,
 }
 
 #[derive(Debug, FromForm)]
@@ -58,123 +66,165 @@ struct UploadForm<'f> {
     request: String,
 }
 
-// Catch OPTIONS requests for CORS preflight
+// ── Routes ───────────────────────────────────────────────────────────────────
+
 #[options("/<_..>")]
-fn options() -> &'static str {
-    ""
-}
+fn options() -> &'static str { "" }
 
-// Basic health check endpoint
-#[get("/health")]
-fn health_check() -> &'static str {
-    "OK"
-}
-
-// Root endpoint
 #[get("/")]
-fn index() -> &'static str {
-    "Distributed Graph Processing API"
+fn index() -> &'static str { "Distributed Graph Processing API" }
+
+#[get("/health")]
+fn health_check() -> &'static str { "OK" }
+
+#[get("/mpi_status")]
+fn mpi_status(mpi: &State<Arc<MPIProcessor>>) -> Json<MpiStatusResponse> {
+    let processes = mpi.get_size() as usize;
+    let mode = mpi.mode_name().to_string();
+    let note = if processes > 1 {
+        format!("{} MPI worker(s) connected and ready to receive graph partitions.", processes - 1)
+    } else {
+        "Running with 1 MPI process (no workers). \
+         Start with mpirun to distribute across worker containers.".to_string()
+    };
+    Json(MpiStatusResponse {
+        mpi_processes: processes,
+        mpi_mode: mode,
+        master_rank: mpi.get_rank(),
+        note,
+    })
 }
 
 #[post("/process_file", data = "<form>")]
-async fn process_graph_file<'f>(mut form: Form<UploadForm<'f>>) -> Result<Json<ProcessResponse>, Status> {
-    println!("Received request data: {}", form.request);
-
+async fn process_graph_file<'f>(
+    mpi: &State<Arc<MPIProcessor>>,
+    mut form: Form<UploadForm<'f>>,
+) -> Json<ProcessResponse> {
     let request: ProcessRequest = match serde_json::from_str(&form.request) {
-        Ok(req) => req,
-        Err(e) => {
-            println!("JSON parsing error: {}", e);
-            return Ok(Json(ProcessResponse {
-                result: "error".to_string(),
-                path: None,
-                distances: None,
-                error: Some(format!("Invalid request format: {}", e)),
-            }));
-        }
+        Ok(r) => r,
+        Err(e) => return Json(ProcessResponse {
+            result: "error".to_string(),
+            path: None, distances: None,
+            error: Some(format!("Invalid request JSON: {}", e)),
+            mpi_processes: mpi.get_size() as usize,
+            mpi_mode: mpi.mode_name().to_string(),
+        }),
     };
 
-    // Use /tmp directory which is guaranteed to be writable
-    let temp_dir = PathBuf::from("/tmp");
-    
-    // Create temporary file path with UUID to avoid conflicts
-    let filename = format!("graph_upload_{}.txt", uuid::Uuid::new_v4());
-    let temp_file_path = temp_dir.join(&filename);
-    
-    println!("Will save file to: {:?}", temp_file_path);
+    let temp_file_path = PathBuf::from("/tmp")
+        .join(format!("graph_{}.txt", uuid::Uuid::new_v4()));
 
-    // Persist the file
     if let Err(e) = form.file.persist_to(&temp_file_path).await {
-        println!("File persistence error: {}", e);
-        return Ok(Json(ProcessResponse {
+        return Json(ProcessResponse {
             result: "error".to_string(),
-            path: None,
-            distances: None,
-            error: Some(format!("Failed to save uploaded file: {}", e)),
-        }));
+            path: None, distances: None,
+            error: Some(format!("Failed to save file: {}", e)),
+            mpi_processes: mpi.get_size() as usize,
+            mpi_mode: mpi.mode_name().to_string(),
+        });
     }
 
-    // Process the file using the distributed system
-    let result = match run_distributed_algorithm(
-        temp_file_path.to_str().unwrap(),
-        &request.algorithm,
-        request.file_format,
-        request.start_node,
-        request.end_node
-    ) {
-        Ok(task_result) => {
+    // MPI calls are blocking — run off the async thread so the Rocket runtime
+    // stays responsive while the master/worker exchange is happening.
+    let mpi_arc = Arc::clone(mpi);
+    let path_str   = temp_file_path.to_str().unwrap().to_string();
+    let algorithm  = request.algorithm.clone();
+    let file_format = request.file_format.clone();
+    let start_node = request.start_node;
+    let end_node   = request.end_node;
+
+    let result = tokio::task::spawn_blocking(move || {
+        run_distributed_algorithm(&mpi_arc, &path_str, &algorithm,
+                                  file_format, start_node, end_node)
+    }).await;
+
+    let _ = std::fs::remove_file(&temp_file_path);
+
+    match result {
+        Ok(Ok(algo)) => {
             let message = match request.algorithm.as_str() {
-                "dfs" => "DFS completed".to_string(),
-                "bfs" => "BFS completed".to_string(),
-                "dijkstra" => "Dijkstra completed".to_string(),
-                "astar" => "A* completed".to_string(),
+                "dfs"          => "DFS completed",
+                "bfs"          => "BFS completed",
+                "dijkstra"     => "Dijkstra completed",
+                "astar"        => "A* completed",
                 "bellman-ford" => {
-                    if task_result.has_negative_cycle.unwrap_or(false) {
-                        "Negative cycle detected".to_string()
+                    if algo.task_result.has_negative_cycle.unwrap_or(false) {
+                        "Negative cycle detected"
                     } else {
-                        "Bellman-Ford completed".to_string()
+                        "Bellman-Ford completed"
                     }
                 },
-                "kruskal" => "Kruskal's MST completed".to_string(),
-                _ => "Algorithm completed".to_string(),
+                "kruskal" => "Kruskal's MST completed",
+                _         => "Algorithm completed",
             };
-
-            ProcessResponse {
-                result: message,
-                path: task_result.path,
-                distances: task_result.distances,
+            println!("[MPI] {} — {} process(es), {} mode",
+                     message, algo.mpi_processes, algo.mpi_mode);
+            Json(ProcessResponse {
+                result: message.to_string(),
+                path: algo.task_result.path,
+                distances: algo.task_result.distances,
                 error: None,
-            }
+                mpi_processes: algo.mpi_processes,
+                mpi_mode: algo.mpi_mode,
+            })
         },
-        Err(e) => {
-            println!("Processing error: {}", e);
-            ProcessResponse {
-                result: "error".to_string(),
-                path: None,
-                distances: None,
-                error: Some(format!("Processing error: {}", e)),
-            }
-        }
-    };
-
-    // Clean up
-    if let Err(e) = std::fs::remove_file(&temp_file_path) {
-        println!("Warning: Failed to remove temporary file: {}", e);
+        Ok(Err(e)) => Json(ProcessResponse {
+            result: "error".to_string(),
+            path: None, distances: None,
+            error: Some(e),
+            mpi_processes: mpi.get_size() as usize,
+            mpi_mode: mpi.mode_name().to_string(),
+        }),
+        Err(e) => Json(ProcessResponse {
+            result: "error".to_string(),
+            path: None, distances: None,
+            error: Some(format!("Task panicked: {}", e)),
+            mpi_processes: mpi.get_size() as usize,
+            mpi_mode: mpi.mode_name().to_string(),
+        }),
     }
-
-    Ok(Json(result))
 }
 
-#[launch]
-fn rocket() -> _ {
-    println!("Starting Rocket server on 0.0.0.0:8000...");
-    
-    // Configure Rocket
-    let figment = rocket::Config::figment()
-        .merge(("address", "0.0.0.0"))
-        .merge(("port", 8000))
-        .merge(("log_level", "normal"));
+// ── Entry point ───────────────────────────────────────────────────────────────
+//
+// Rocket's #[launch] is NOT used here because we need to inspect MPI rank
+// before deciding whether to start the web server or a worker loop.
 
-    rocket::custom(figment)
-        .attach(CORS)
-        .mount("/", routes![index, health_check, process_graph_file, options])
+fn main() {
+    // Initialise MPI once for the lifetime of this process.
+    let mpi = Arc::new(MPIProcessor::new());
+
+    println!("[MPI] Process {} of {} started — mode: {}",
+             mpi.get_rank(), mpi.get_size(), mpi.mode_name());
+
+    if mpi.is_master() {
+        // ── Rank 0: run the Rocket web server ──────────────────────────────
+        println!("[MPI] This is the master node. Starting web server on :8000");
+
+        let figment = rocket::Config::figment()
+            .merge(("address", "0.0.0.0"))
+            .merge(("port", 8000))
+            .merge(("log_level", "normal"));
+
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                rocket::custom(figment)
+                    .attach(CORS)
+                    .manage(mpi)
+                    .mount("/", routes![
+                        index, health_check, mpi_status, process_graph_file, options
+                    ])
+                    .launch()
+                    .await
+                    .expect("Rocket server failed");
+            });
+    } else {
+        // ── Rank > 0: blocking worker loop ─────────────────────────────────
+        // Each iteration receives one graph partition, processes it, and sends
+        // the result back to the master. Loop stays alive between requests.
+        mpi.run_worker_loop();
+    }
 }

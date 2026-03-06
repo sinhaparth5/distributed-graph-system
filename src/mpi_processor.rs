@@ -102,6 +102,11 @@ pub struct MPIProcessor {
     mode: ExecutionMode,
 }
 
+// Safety: MPIProcessor is initialised with Threading::Multiple so OpenMPI
+// allows concurrent use from different threads within the same process.
+unsafe impl Send for MPIProcessor {}
+unsafe impl Sync for MPIProcessor {}
+
 impl MPIProcessor {
     pub fn new() -> Self {
         // Try to initialize MPI with thread support first, then fall back
@@ -178,6 +183,22 @@ impl MPIProcessor {
         match &self.mode {
             ExecutionMode::Distributed { size, .. } => *size,
             ExecutionMode::SingleProcess => 1,
+        }
+    }
+
+    pub fn mode_name(&self) -> &'static str {
+        match &self.mode {
+            ExecutionMode::Distributed { .. } => "distributed",
+            ExecutionMode::SingleProcess => "single-process",
+        }
+    }
+
+    /// Called on worker processes (rank > 0). Blocks forever, handling one
+    /// task per request that the master dispatches.
+    pub fn run_worker_loop(&self) {
+        println!("[MPI] Worker process {} ready, waiting for tasks...", self.get_rank());
+        loop {
+            self.execute_worker();
         }
     }
 

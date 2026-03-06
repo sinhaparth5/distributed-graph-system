@@ -321,11 +321,10 @@ impl Graph {
             }
         }
 
-        let mut dist_vec = vec![f64::INFINITY; self.nodes.len()];
+        let max_id = *self.nodes.keys().max().unwrap_or(&0);
+        let mut dist_vec = vec![f64::INFINITY; max_id + 1];
         for (&node, &dist) in distances.iter() {
-            if node < dist_vec.len() {
-                dist_vec[node] = dist;
-            }
+            dist_vec[node] = dist;
         }
 
         let path = self.reconstruct_path(&previous, start);
@@ -416,12 +415,13 @@ impl Graph {
             return (Vec::new(), false);
         }
 
-        let n = self.nodes.len();
+        let max_id = *self.nodes.keys().max().unwrap_or(&0);
+        let n = max_id + 1;
         let mut distances = vec![f64::INFINITY; n];
         distances[start] = 0.0;
 
         // Relax edges |V| - 1 times
-        for _ in 0..n-1 {
+        for _ in 0..self.nodes.len().saturating_sub(1) {
             for (&u, edges) in &self.adj_list {
                 for &(v, weight) in edges {
                     if distances[u] != f64::INFINITY && distances[u] + weight < distances[v] {
