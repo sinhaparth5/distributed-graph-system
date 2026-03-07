@@ -24,17 +24,23 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Configure SSH for MPI
 RUN mkdir /var/run/sshd
 RUN echo 'root:password' | chpasswd
-RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
-RUN sed -i 's/#StrictHostKeyChecking ask/StrictHostKeyChecking no/' /etc/ssh/ssh_config
+
+# Allow root login
+RUN sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+
+# Disable host key checking and known_hosts for MPI SSH connections
+RUN echo "Host *" >> /etc/ssh/ssh_config && \
+    echo "    StrictHostKeyChecking no" >> /etc/ssh/ssh_config && \
+    echo "    UserKnownHostsFile /dev/null" >> /etc/ssh/ssh_config
 
 # SSH login fix
 RUN sed 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' -i /etc/pam.d/sshd
 
-# Create SSH key for passwordless access
-RUN mkdir -p /root/.ssh
-RUN ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa
-RUN cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys
-RUN chmod 600 /root/.ssh/authorized_keys
+# Create SSH key for passwordless MPI access
+RUN mkdir -p /root/.ssh && \
+    ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa && \
+    cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys && \
+    chmod 600 /root/.ssh/authorized_keys
 
 # Environment variables for MPI
 ENV OMPI_ALLOW_RUN_AS_ROOT=1
@@ -46,28 +52,24 @@ WORKDIR /app
 # Expose SSH and Rocket web server ports
 EXPOSE 22 8000
 
-# MPI hostfile — used by mpirun on the master to locate worker processes
+# MPI hostfile
 COPY hostfile /etc/mpi-hostfile
 
-# Copy both supervisor configurations
-COPY supervisor-master.conf /etc/supervisor/conf.d/supervisor-master.conf
-COPY supervisor-worker.conf /etc/supervisor/conf.d/supervisor-worker.conf
+# Copy supervisor configs to a staging area (NOT conf.d) so supervisord
+# does not auto-load both of them regardless of role.
+COPY supervisor-master.conf /etc/supervisor/supervisor-master.conf
+COPY supervisor-worker.conf /etc/supervisor/supervisor-worker.conf
 
-# Create startup script to select appropriate config based on NODE_ROLE
-RUN echo '#!/bin/bash\n\
+# Startup script: copy only the role-appropriate config into conf.d
+RUN printf '#!/bin/bash\n\
 if [ "$NODE_ROLE" = "master" ]; then\n\
     echo "Starting as master node with web server"\n\
-    cp /etc/supervisor/conf.d/supervisor-master.conf /etc/supervisor/conf.d/supervisor.conf\n\
+    cp /etc/supervisor/supervisor-master.conf /etc/supervisor/conf.d/supervisor.conf\n\
 else\n\
     echo "Starting as worker node without web server"\n\
-    cp /etc/supervisor/conf.d/supervisor-worker.conf /etc/supervisor/conf.d/supervisor.conf\n\
+    cp /etc/supervisor/supervisor-worker.conf /etc/supervisor/conf.d/supervisor.conf\n\
 fi\n\
-\n\
-/usr/bin/supervisord -c /etc/supervisor/supervisord.conf\n'\
-> /start.sh
+exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf\n' > /start.sh && \
+    chmod +x /start.sh
 
-# Make the startup script executable
-RUN chmod +x /start.sh
-
-# Run the startup script as the entrypoint
 CMD ["/start.sh"]

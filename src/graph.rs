@@ -457,7 +457,8 @@ impl Graph {
         }
         edges.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
 
-        let mut union_find = UnionFind::new(self.nodes.len());
+        let max_id = *self.nodes.keys().max().unwrap_or(&0);
+        let mut union_find = UnionFind::new(max_id + 1);
         let mut mst = Vec::new();
 
         for (u, v, _) in edges {
