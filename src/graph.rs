@@ -16,7 +16,6 @@ pub struct Edge {
     pub weight: f64,
 }
 
-// Add NodeFeatures enum to represent different feature storage options
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NodeFeatures {
     None,
@@ -43,7 +42,6 @@ impl Ord for OrderedFloat {
 
 impl Neg for OrderedFloat {
     type Output = OrderedFloat;
-
     fn neg(self) -> Self::Output {
         OrderedFloat(-self.0)
     }
@@ -55,6 +53,11 @@ pub struct Graph {
     node_features: NodeFeatures,
     feature_descriptions: HashMap<usize, String>,
     ego_features: HashMap<usize, Vec<f64>>,
+    /// Maps compact sequential index (0..n) → original node ID.
+    /// Used by algorithms that need contiguous array indexing.
+    compact_to_id: Vec<usize>,
+    /// Maps original node ID → compact sequential index.
+    id_to_compact: HashMap<usize, usize>,
 }
 
 impl Graph {
@@ -65,135 +68,105 @@ impl Graph {
             node_features: NodeFeatures::None,
             feature_descriptions: HashMap::new(),
             ego_features: HashMap::new(),
+            compact_to_id: Vec::new(),
+            id_to_compact: HashMap::new(),
         }
     }
 
     pub fn add_node(&mut self, node: Node) {
         let node_id = node.id;
+        if !self.nodes.contains_key(&node_id) {
+            // Assign the next compact index for this new node
+            let compact_idx = self.compact_to_id.len();
+            self.compact_to_id.push(node_id);
+            self.id_to_compact.insert(node_id, compact_idx);
+            self.adj_list.entry(node_id).or_insert_with(Vec::new);
+        }
         self.nodes.insert(node_id, node);
-        self.adj_list.entry(node_id).or_insert(Vec::new());
     }
 
     pub fn add_edge(&mut self, edge: Edge) {
         if !self.nodes.contains_key(&edge.from) || !self.nodes.contains_key(&edge.to) {
-            return; // Silently ignore edges with non-existent nodes
+            return;
         }
-        
         self.adj_list
             .entry(edge.from)
-            .or_insert(Vec::new())
+            .or_insert_with(Vec::new)
             .push((edge.to, edge.weight));
     }
 
-    // New method to check if a node exists
     pub fn has_node(&self, id: usize) -> bool {
         self.nodes.contains_key(&id)
     }
 
-    // Method to set node features
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn edge_count(&self) -> usize {
+        self.adj_list.values().map(|v| v.len()).sum()
+    }
+
     pub fn set_node_features(&mut self, features: NodeFeatures) {
         self.node_features = features;
     }
 
-    // Method to set feature descriptions
     pub fn set_feature_descriptions(&mut self, descriptions: HashMap<usize, String>) {
         self.feature_descriptions = descriptions;
     }
 
-    // Method to set ego features
     pub fn set_ego_features(&mut self, features: HashMap<usize, Vec<f64>>) {
         self.ego_features = features;
     }
 
-    // Method to merge another graph into this one
     pub fn merge(&mut self, other: Graph) {
-        // Merge nodes
-        for (id, node) in other.nodes {
-            if !self.nodes.contains_key(&id) {
-                self.add_node(node);
-            }
+        for (_, node) in other.nodes {
+            self.add_node(node);
         }
-
-        // Merge edges
         for (from, neighbors) in other.adj_list {
             for (to, weight) in neighbors {
                 self.add_edge(Edge { from, to, weight });
             }
         }
-
-        // Merge features based on type
         match other.node_features {
             NodeFeatures::None => {}
             NodeFeatures::VectorPerNode(features) => {
                 match &mut self.node_features {
-                    NodeFeatures::None => {
-                        self.node_features = NodeFeatures::VectorPerNode(features);
-                    }
-                    NodeFeatures::VectorPerNode(existing_features) => {
-                        for (id, vector) in features {
-                            existing_features.insert(id, vector);
-                        }
+                    NodeFeatures::None => self.node_features = NodeFeatures::VectorPerNode(features),
+                    NodeFeatures::VectorPerNode(existing) => {
+                        for (id, vector) in features { existing.insert(id, vector); }
                     }
                     NodeFeatures::SparseFeatures(_) => {
-                        // Convert and merge if needed
                         println!("Warning: Cannot merge different feature types");
                     }
                 }
             }
             NodeFeatures::SparseFeatures(features) => {
                 match &mut self.node_features {
-                    NodeFeatures::None => {
-                        self.node_features = NodeFeatures::SparseFeatures(features);
-                    }
-                    NodeFeatures::SparseFeatures(existing_features) => {
-                        for (id, feature_map) in features {
-                            existing_features.insert(id, feature_map);
-                        }
+                    NodeFeatures::None => self.node_features = NodeFeatures::SparseFeatures(features),
+                    NodeFeatures::SparseFeatures(existing) => {
+                        for (id, feature_map) in features { existing.insert(id, feature_map); }
                     }
                     NodeFeatures::VectorPerNode(_) => {
-                        // Convert and merge if needed
                         println!("Warning: Cannot merge different feature types");
                     }
                 }
             }
         }
-
-        // Merge feature descriptions
-        for (id, desc) in other.feature_descriptions {
-            self.feature_descriptions.insert(id, desc);
-        }
-
-        // Merge ego features
-        for (id, features) in other.ego_features {
-            self.ego_features.insert(id, features);
-        }
+        for (id, desc) in other.feature_descriptions { self.feature_descriptions.insert(id, desc); }
+        for (id, features) in other.ego_features { self.ego_features.insert(id, features); }
     }
 
-    pub fn get_node(&self, id: usize) -> Option<&Node> {
-        self.nodes.get(&id)
-    }
-
-    pub fn get_nodes(&self) -> &HashMap<usize, Node> {
-        &self.nodes
-    }
-
-    pub fn get_node_cloned(&self, id: usize) -> Option<Node> {
-        self.nodes.get(&id).cloned()
-    }
-
-    pub fn get_all_nodes_ids(&self) -> Vec<usize> {
-        self.nodes.keys().cloned().collect()
-    }
+    pub fn get_node(&self, id: usize) -> Option<&Node> { self.nodes.get(&id) }
+    pub fn get_nodes(&self) -> &HashMap<usize, Node> { &self.nodes }
+    pub fn get_node_cloned(&self, id: usize) -> Option<Node> { self.nodes.get(&id).cloned() }
+    pub fn get_all_nodes_ids(&self) -> Vec<usize> { self.nodes.keys().cloned().collect() }
 
     pub fn get_all_edges(&self) -> Vec<Edge> {
         let mut edges = Vec::new();
         for (&from, neighbors) in &self.adj_list {
             for &(to, weight) in neighbors {
-                edges.push(Edge {
-                    from,
-                    to,
-                    weight,
-                });
+                edges.push(Edge { from, to, weight });
             }
         }
         edges
@@ -203,19 +176,15 @@ impl Graph {
         self.adj_list.get(&id)
     }
 
-    // Method to get node features
     pub fn get_node_features(&self, id: usize) -> Option<Vec<f64>> {
         match &self.node_features {
             NodeFeatures::None => None,
             NodeFeatures::VectorPerNode(features) => features.get(&id).cloned(),
             NodeFeatures::SparseFeatures(features) => {
-                if let Some(sparse_features) = features.get(&id) {
-                    // Convert sparse to dense if needed
-                    let max_feature_id = sparse_features.keys().max().unwrap_or(&0);
-                    let mut dense = vec![0.0; max_feature_id + 1];
-                    for (&feat_id, &value) in sparse_features {
-                        dense[feat_id] = value;
-                    }
+                if let Some(sparse) = features.get(&id) {
+                    let max_feat = sparse.keys().max().unwrap_or(&0);
+                    let mut dense = vec![0.0; max_feat + 1];
+                    for (&feat_id, &value) in sparse { dense[feat_id] = value; }
                     Some(dense)
                 } else {
                     None
@@ -224,31 +193,28 @@ impl Graph {
         }
     }
 
-    // Method to get feature description
     pub fn get_feature_description(&self, feature_id: usize) -> Option<&String> {
         self.feature_descriptions.get(&feature_id)
     }
 
-    // Method to get ego features
     pub fn get_ego_features(&self, ego_id: usize) -> Option<&Vec<f64>> {
         self.ego_features.get(&ego_id)
     }
 
+    // ── Graph Algorithms ───────────────────────────────────────────────────────
+
     pub fn dfs(&self, start: usize) -> Vec<usize> {
         let mut visited = HashSet::new();
         let mut path = Vec::new();
-
         if self.nodes.contains_key(&start) {
             self.dfs_util(start, &mut visited, &mut path);
         }
-
         path
     }
 
     fn dfs_util(&self, vertex: usize, visited: &mut HashSet<usize>, path: &mut Vec<usize>) {
         visited.insert(vertex);
         path.push(vertex);
-
         if let Some(neighbors) = self.adj_list.get(&vertex) {
             for &(next, _) in neighbors {
                 if !visited.contains(&next) {
@@ -263,9 +229,7 @@ impl Graph {
         let mut queue = VecDeque::new();
         let mut path = Vec::new();
 
-        if !self.nodes.contains_key(&start) {
-            return path;
-        }
+        if !self.nodes.contains_key(&start) { return path; }
 
         visited.insert(start);
         queue.push_back(start);
@@ -284,6 +248,9 @@ impl Graph {
         path
     }
 
+    /// Returns (distances, path).
+    /// `distances` is a compact Vec indexed 0..num_nodes (safe for any node ID size).
+    /// Use `compact_to_original_id` to map index back to original node ID.
     pub fn dijkstra(&self, start: usize) -> (Vec<f64>, Vec<usize>) {
         if !self.nodes.contains_key(&start) {
             return (Vec::new(), Vec::new());
@@ -295,19 +262,14 @@ impl Graph {
         let mut previous: HashMap<usize, Option<usize>> = self.nodes.keys()
             .map(|&k| (k, None))
             .collect();
-        
-        // Use BinaryHeap instead of PriorityQueue
         let mut heap = BinaryHeap::new();
 
         distances.insert(start, 0.0);
         heap.push((-OrderedFloat(0.0), start));
 
         while let Some((cost, current)) = heap.pop() {
-            let cost = -cost.0; // Convert back to actual cost
-
-            if cost > distances[&current] {
-                continue;
-            }
+            let cost = -cost.0;
+            if cost > distances[&current] { continue; }
 
             if let Some(neighbors) = self.adj_list.get(&current) {
                 for &(next, weight) in neighbors {
@@ -321,10 +283,12 @@ impl Graph {
             }
         }
 
-        let max_id = *self.nodes.keys().max().unwrap_or(&0);
-        let mut dist_vec = vec![f64::INFINITY; max_id + 1];
-        for (&node, &dist) in distances.iter() {
-            dist_vec[node] = dist;
+        // Build compact distances Vec — safe for any node ID magnitude
+        let mut dist_vec = vec![f64::INFINITY; self.compact_to_id.len()];
+        for (compact_idx, &orig_id) in self.compact_to_id.iter().enumerate() {
+            if let Some(&d) = distances.get(&orig_id) {
+                dist_vec[compact_idx] = d;
+            }
         }
 
         let path = self.reconstruct_path(&previous, start);
@@ -356,18 +320,15 @@ impl Graph {
                 return self.reconstruct_path_from_map(&came_from, current);
             }
 
-            if current_f > f_score[&current] {
-                continue;
-            }
+            if current_f > f_score[&current] { continue; }
 
             if let Some(neighbors) = self.adj_list.get(&current) {
                 for &(next, weight) in neighbors {
-                    let tentative_g_score = g_score[&current] + weight;
-
-                    if tentative_g_score < g_score[&next] {
+                    let tentative_g = g_score[&current] + weight;
+                    if tentative_g < g_score[&next] {
                         came_from.insert(next, current);
-                        g_score.insert(next, tentative_g_score);
-                        let f = tentative_g_score + self.heuristic(next, goal);
+                        g_score.insert(next, tentative_g);
+                        let f = tentative_g + self.heuristic(next, goal);
                         f_score.insert(next, f);
                         open_set.push((-OrderedFloat(f), next));
                     }
@@ -375,24 +336,101 @@ impl Graph {
             }
         }
 
-        Vec::new()  // No path found
+        Vec::new()
     }
 
-    fn heuristic(&self, from: usize, to: usize) -> f64 {
-        // Simple heuristic - can be improved based on graph's properties
+    fn heuristic(&self, _from: usize, _to: usize) -> f64 {
         1.0
     }
 
-    fn reconstruct_path(&self, previous: &HashMap<usize, Option<usize>>, start: usize) -> Vec<usize> {
-        let mut path = Vec::new();
-        let mut current = start;
-        path.push(current);
+    /// Returns (distances, has_negative_cycle).
+    /// `distances` is a compact Vec indexed 0..num_nodes (safe for any node ID size).
+    pub fn bellman_ford(&self, start: usize) -> (Vec<f64>, bool) {
+        if !self.nodes.contains_key(&start) {
+            return (Vec::new(), false);
+        }
 
+        let mut distances: HashMap<usize, f64> = self.nodes.keys()
+            .map(|&k| (k, f64::INFINITY))
+            .collect();
+        distances.insert(start, 0.0);
+
+        for _ in 0..self.nodes.len().saturating_sub(1) {
+            for (&u, edges) in &self.adj_list {
+                let du = distances[&u];
+                if du == f64::INFINITY { continue; }
+                for &(v, weight) in edges {
+                    if du + weight < distances[&v] {
+                        distances.insert(v, du + weight);
+                    }
+                }
+            }
+        }
+
+        let mut has_negative_cycle = false;
+        'outer: for (&u, edges) in &self.adj_list {
+            let du = distances[&u];
+            if du == f64::INFINITY { continue; }
+            for &(v, weight) in edges {
+                if du + weight < distances[&v] {
+                    has_negative_cycle = true;
+                    break 'outer;
+                }
+            }
+        }
+
+        // Build compact distances Vec — safe for any node ID magnitude
+        let mut dist_vec = vec![f64::INFINITY; self.compact_to_id.len()];
+        for (compact_idx, &orig_id) in self.compact_to_id.iter().enumerate() {
+            if let Some(&d) = distances.get(&orig_id) {
+                dist_vec[compact_idx] = d;
+            }
+        }
+
+        (dist_vec, has_negative_cycle)
+    }
+
+    /// Returns MST as flat list of original node ID pairs: [u0, v0, u1, v1, ...]
+    pub fn kruskal(&self) -> Vec<usize> {
+        let mut edges: Vec<(usize, usize, f64)> = Vec::new();
+        for (&u, neighbors) in &self.adj_list {
+            for &(v, weight) in neighbors {
+                edges.push((u, v, weight));
+            }
+        }
+        edges.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(Ordering::Equal));
+
+        // UnionFind uses compact indices (0..n) to stay memory-safe
+        let n = self.compact_to_id.len();
+        let mut uf = UnionFind::new(n);
+        let mut mst = Vec::new();
+
+        for (u, v, _) in edges {
+            let cu = match self.id_to_compact.get(&u) { Some(&c) => c, None => continue };
+            let cv = match self.id_to_compact.get(&v) { Some(&c) => c, None => continue };
+            if uf.find(cu) != uf.find(cv) {
+                uf.union(cu, cv);
+                mst.push(u); // original IDs in output
+                mst.push(v);
+            }
+        }
+
+        mst
+    }
+
+    /// Returns the ordered list of original node IDs for compact indices 0..n.
+    /// Useful for interpreting the distances Vec returned by dijkstra/bellman_ford.
+    pub fn compact_to_original_id(&self) -> &Vec<usize> {
+        &self.compact_to_id
+    }
+
+    fn reconstruct_path(&self, previous: &HashMap<usize, Option<usize>>, start: usize) -> Vec<usize> {
+        let mut path = vec![start];
+        let mut current = start;
         while let Some(Some(prev)) = previous.get(&current) {
             path.push(*prev);
             current = *prev;
         }
-
         path.reverse();
         path
     }
@@ -400,78 +438,16 @@ impl Graph {
     fn reconstruct_path_from_map(&self, came_from: &HashMap<usize, usize>, current: usize) -> Vec<usize> {
         let mut path = vec![current];
         let mut current = current;
-
         while let Some(&prev) = came_from.get(&current) {
             path.push(prev);
             current = prev;
         }
-
         path.reverse();
         path
     }
-
-    pub fn bellman_ford(&self, start: usize) -> (Vec<f64>, bool) {
-        if !self.nodes.contains_key(&start) {
-            return (Vec::new(), false);
-        }
-
-        let max_id = *self.nodes.keys().max().unwrap_or(&0);
-        let n = max_id + 1;
-        let mut distances = vec![f64::INFINITY; n];
-        distances[start] = 0.0;
-
-        // Relax edges |V| - 1 times
-        for _ in 0..self.nodes.len().saturating_sub(1) {
-            for (&u, edges) in &self.adj_list {
-                for &(v, weight) in edges {
-                    if distances[u] != f64::INFINITY && distances[u] + weight < distances[v] {
-                        distances[v] = distances[u] + weight;
-                    }
-                }
-            }
-        }
-
-        // Check for negative weight cycles
-        let mut has_negative_cycle = false;
-        for (&u, edges) in &self.adj_list {
-            for &(v, weight) in edges {
-                if distances[u] != f64::INFINITY && distances[u] + weight < distances[v] {
-                    has_negative_cycle = true;
-                    break;
-                }
-            }
-            if has_negative_cycle {
-                break;
-            }
-        }
-
-        (distances, has_negative_cycle)
-    }
-
-    pub fn kruskal(&self) -> Vec<usize> {
-        let mut edges = Vec::new();
-        for (&u, neighbors) in &self.adj_list {
-            for &(v, weight) in neighbors {
-                edges.push((u, v, weight));
-            }
-        }
-        edges.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
-
-        let max_id = *self.nodes.keys().max().unwrap_or(&0);
-        let mut union_find = UnionFind::new(max_id + 1);
-        let mut mst = Vec::new();
-
-        for (u, v, _) in edges {
-            if union_find.find(u) != union_find.find(v) {
-                union_find.union(u, v);
-                mst.push(u);
-                mst.push(v);
-            }
-        }
-
-        mst
-    }
 }
+
+// ── Union-Find (compact indices only) ─────────────────────────────────────────
 
 struct UnionFind {
     parent: Vec<usize>,
@@ -494,17 +470,13 @@ impl UnionFind {
     }
 
     fn union(&mut self, x: usize, y: usize) {
-        let root_x = self.find(x);
-        let root_y = self.find(y);
-
-        if root_x != root_y {
-            match self.rank[root_x].cmp(&self.rank[root_y]) {
-                std::cmp::Ordering::Less => self.parent[root_x] = root_y,
-                std::cmp::Ordering::Greater => self.parent[root_y] = root_x,
-                std::cmp::Ordering::Equal => {
-                    self.parent[root_y] = root_x;
-                    self.rank[root_x] += 1;
-                }
+        let rx = self.find(x);
+        let ry = self.find(y);
+        if rx != ry {
+            match self.rank[rx].cmp(&self.rank[ry]) {
+                Ordering::Less    => self.parent[rx] = ry,
+                Ordering::Greater => self.parent[ry] = rx,
+                Ordering::Equal   => { self.parent[ry] = rx; self.rank[rx] += 1; }
             }
         }
     }
