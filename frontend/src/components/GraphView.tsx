@@ -1,13 +1,14 @@
-import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
-import CytoscapeComponent from 'react-cytoscapejs'
-import cytoscape from 'cytoscape'
+import { useRef, useState, useMemo, useCallback } from 'react'
+import { GraphCanvas } from 'reagraph'
+import type { GraphCanvasRef, GraphNode, GraphEdge } from 'reagraph'
 
 import type { ParsedGraph } from '../utils/parseGraph'
+import { MAX_DISPLAY_NODES } from '../utils/parseGraph'
 import type { ApiResult, Algorithm } from '../types'
 
-// ── Types ──────────────────────────────────────────────────────────────────────
+// ── Types ───────────────────────────────────────────────────────────────────────
 
-type LayoutName = 'cose' | 'circle' | 'grid' | 'concentric'
+interface SelectedNode { id: string; degree: number; distance: string | null }
 
 interface Props {
   parsedGraph: ParsedGraph
@@ -17,250 +18,232 @@ interface Props {
   endNode: string
 }
 
-// ── Stylesheet factory ────────────────────────────────────────────────────────
-// font-family with commas is NOT supported in Cytoscape — use a single value.
+type LayoutMode =
+  | '2d-force'
+  | '3d-force'
+  | '2d-circular'
+  | '2d-radial'
+  | '3d-radial'
 
-function makeStylesheet(showLabels: boolean): cytoscape.Stylesheet[] {
-  return [
-    {
-      selector: 'node',
-      style: {
-        'background-color': '#334155',
-        'border-color': '#475569',
-        'border-width': 1,
-        'width': showLabels ? 28 : 14,
-        'height': showLabels ? 28 : 14,
-        'label': showLabels ? 'data(label)' : '',
-        'color': '#94a3b8',
-        'font-size': 9,
-        'text-valign': 'center',
-        'text-halign': 'center',
-        'min-zoomed-font-size': 7,
-      } as cytoscape.Css.Node,
-    },
-    {
-      selector: 'edge',
-      style: {
-        'line-color': '#1e293b',
-        'width': showLabels ? 1.5 : 0.8,
-        'curve-style': 'haystack',   // faster rendering than bezier for large graphs
-        'opacity': 0.8,
-      } as cytoscape.Css.Edge,
-    },
-    // ── Highlight classes ────────────────────────────────────────────────────
-    {
-      selector: 'node.path-node',
-      style: {
-        'background-color': '#0e7490',
-        'border-color': '#22d3ee',
-        'border-width': 2,
-        'color': '#cffafe',
-        'width': 26,
-        'height': 26,
-      } as cytoscape.Css.Node,
-    },
-    {
-      selector: 'node.start-node',
-      style: {
-        'background-color': '#14532d',
-        'border-color': '#4ade80',
-        'border-width': 2.5,
-        'color': '#dcfce7',
-        'width': 32,
-        'height': 32,
-        'font-size': 10,
-      } as cytoscape.Css.Node,
-    },
-    {
-      selector: 'node.end-node',
-      style: {
-        'background-color': '#450a0a',
-        'border-color': '#f87171',
-        'border-width': 2.5,
-        'color': '#fee2e2',
-        'width': 32,
-        'height': 32,
-        'font-size': 10,
-      } as cytoscape.Css.Node,
-    },
-    {
-      selector: 'edge.path-edge',
-      style: {
-        'line-color': '#22d3ee',
-        'width': 2.5,
-        'opacity': 1,
-        'curve-style': 'bezier',
-        'target-arrow-shape': 'triangle',
-        'target-arrow-color': '#22d3ee',
-        'arrow-scale': 0.8,
-      } as cytoscape.Css.Edge,
-    },
-    {
-      selector: 'edge.mst-edge',
-      style: {
-        'line-color': '#4ade80',
-        'width': 2.5,
-        'opacity': 1,
-        'curve-style': 'bezier',
-      } as cytoscape.Css.Edge,
-    },
-    {
-      selector: 'node.dimmed',
-      style: { 'opacity': 0.15 } as cytoscape.Css.Node,
-    },
-    {
-      selector: 'edge.dimmed',
-      style: { 'opacity': 0.05 } as cytoscape.Css.Edge,
-    },
-  ]
+const LAYOUT_TYPE = {
+  '2d-force':   'forceDirected2d',
+  '3d-force':   'forceDirected3d',
+  '2d-circular':'circular2d',
+  '2d-radial':  'radialOut2d',
+  '3d-radial':  'radialOut3d',
+} as const
+
+const LAYOUT_BUTTONS: { id: LayoutMode; label: string }[] = [
+  { id: '2d-force',    label: 'force 2D' },
+  { id: '3d-force',    label: 'force 3D' },
+  { id: '2d-circular', label: 'circular' },
+  { id: '2d-radial',   label: 'radial 2D' },
+  { id: '3d-radial',   label: 'radial 3D' },
+]
+
+// ── Color / size helpers ────────────────────────────────────────────────────────
+
+function degreeColor(degree: number, maxDeg: number): string {
+  const r = maxDeg > 0 ? degree / maxDeg : 0
+  if (r > 0.95) return '#f97316'  // orange-red  — super-hub
+  if (r > 0.80) return '#f59e0b'  // amber        — hub
+  if (r > 0.40) return '#22d3ee'  // cyan-light
+  return '#0891b2'                 // cyan-dark    — leaf
 }
 
-// ── Component ──────────────────────────────────────────────────────────────────
+function degreeSize(degree: number, maxDeg: number): number {
+  const r = maxDeg > 0 ? degree / maxDeg : 0
+  return 2 + r * 8  // 2 → 10
+}
+
+// ── Reagraph dark theme ─────────────────────────────────────────────────────────
+
+const DARK_THEME = {
+  canvas: { background: '#020817', fog: false },
+  node: {
+    fill: '#0891b2',
+    activeFill: '#22d3ee',
+    opacity: 1,
+    selectedOpacity: 1,
+    inactiveOpacity: 0.08,
+    label: {
+      color: '#94a3b8',
+      stroke: '#020817',
+      activeColor: '#e2e8f0',
+      fontSize: 6,
+    },
+    ring: { fill: '#a78bfa', activeFill: '#7c3aed' },
+  },
+  edge: {
+    fill: '#1e3a5f',
+    activeFill: '#22d3ee',
+    opacity: 0.55,
+    selectedOpacity: 1,
+    inactiveOpacity: 0.03,
+    label: {
+      color: '#475569',
+      stroke: '#020817',
+      activeColor: '#94a3b8',
+      fontSize: 5,
+    },
+  },
+  ring: { fill: '#a78bfa', activeFill: '#7c3aed' },
+  arrow: { fill: '#1e3a5f', activeFill: '#22d3ee' },
+  lasso: { border: '#a78bfa', background: 'rgba(167,139,250,0.08)' },
+  cluster: {
+    stroke: '#1e3a5f',
+    label: { color: '#475569', stroke: '#020817', fontSize: 10 },
+  },
+}
+
+// ── Component ───────────────────────────────────────────────────────────────────
 
 export default function GraphView({ parsedGraph, result, algorithm, startNode, endNode }: Props) {
-  const cyRef       = useRef<cytoscape.Core | null>(null)
-  const mountedRef  = useRef(true)
-  const [activeLayout, setActiveLayout] = useState<LayoutName>('cose')
+  const graphRef = useRef<GraphCanvasRef | null>(null)
+
+  const [layoutMode,   setLayoutMode]   = useState<LayoutMode>('2d-force')
   const [showEdges,    setShowEdges]    = useState(true)
+  const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null)
 
-  useEffect(() => {
-    mountedRef.current = true
-    return () => { mountedRef.current = false }
-  }, [])
-
+  const maxDeg     = Math.max(parsedGraph.maxDegree, 1)
   const nodeCount  = parsedGraph.nodes.length
-  const showLabels = nodeCount <= 50
+  const is3D       = layoutMode.startsWith('3d')
+  const showLabels = nodeCount <= 60
 
-  const stylesheet = useMemo(() => makeStylesheet(showLabels), [showLabels])
+  // ── Build path/edge sets from algorithm result ─────────────────────────────
+  const { pathNodeSet, pathEdgeSet, mstEdgeSet } = useMemo(() => {
+    const pathNodeSet = new Set<string>()
+    const pathEdgeSet = new Set<string>()
+    const mstEdgeSet  = new Set<string>()
+    if (!result || result.error) return { pathNodeSet, pathEdgeSet, mstEdgeSet }
 
-  const elements: cytoscape.ElementDefinition[] = useMemo(() => {
-    const nodes = parsedGraph.nodes
-    const edges = showEdges ? parsedGraph.edges : []
-    return [...nodes, ...edges]
-  }, [parsedGraph, showEdges])
-
-  // ── Apply result highlight classes ─────────────────────────────────────────
-  const applyResultStyles = useCallback(() => {
-    const cy = cyRef.current
-    if (!cy || !mountedRef.current) return
-
-    cy.elements().removeClass('start-node end-node path-node mst-edge path-edge dimmed')
-
-    if (!result || result.error) return
-
-    const path    = result.path ?? []
-    const pathSet = new Set(path.map(String))
-
+    const path = result.path ?? []
     if (algorithm === 'kruskal') {
-      cy.nodes().addClass('dimmed')
-      cy.edges().addClass('dimmed')
-
       for (let i = 0; i + 1 < path.length; i += 2) {
-        const u = String(path[i])
-        const v = String(path[i + 1])
-        cy.$id(u).removeClass('dimmed').addClass('path-node')
-        cy.$id(v).removeClass('dimmed').addClass('path-node')
-        cy.edges(`[source="${u}"][target="${v}"], [source="${v}"][target="${u}"]`)
-          .removeClass('dimmed').addClass('mst-edge')
+        pathNodeSet.add(String(path[i]))
+        pathNodeSet.add(String(path[i + 1]))
+        mstEdgeSet.add(`${path[i]}-${path[i + 1]}`)
+        mstEdgeSet.add(`${path[i + 1]}-${path[i]}`)
       }
-    } else if (path.length > 0) {
-      cy.nodes().forEach(n => { if (!pathSet.has(n.id())) n.addClass('dimmed') })
-      cy.edges().addClass('dimmed')
-
-      path.forEach(id => cy.$id(String(id)).removeClass('dimmed').addClass('path-node'))
-
+    } else {
+      path.forEach(id => pathNodeSet.add(String(id)))
       for (let i = 0; i + 1 < path.length; i++) {
-        cy.edges(`[source="${path[i]}"][target="${path[i + 1]}"]`)
-          .removeClass('dimmed').addClass('path-edge')
+        pathEdgeSet.add(`${path[i]}-${path[i + 1]}`)
+        pathEdgeSet.add(`${path[i + 1]}-${path[i]}`)
       }
     }
+    return { pathNodeSet, pathEdgeSet, mstEdgeSet }
+  }, [result, algorithm])
 
-    if (startNode) cy.$id(startNode).removeClass('dimmed path-node').addClass('start-node')
-    if (endNode && algorithm === 'astar') cy.$id(endNode).removeClass('dimmed path-node').addClass('end-node')
-  }, [result, algorithm, startNode, endNode])
+  // ── Build Reagraph nodes ───────────────────────────────────────────────────
+  const graphNodes: GraphNode[] = useMemo(() => {
+    return parsedGraph.nodes.map(n => {
+      const id     = n.data.id as string
+      const degree = n.data.degree as number
+      let fill     = degreeColor(degree, maxDeg)
 
-  useEffect(() => { applyResultStyles() }, [applyResultStyles])
+      // Result highlight overrides
+      if (pathNodeSet.has(id) && id !== startNode && !(id === endNode && algorithm === 'astar')) {
+        fill = '#22d3ee'
+      }
+      if (startNode && id === startNode) fill = '#4ade80'
+      if (endNode   && id === endNode && algorithm === 'astar') fill = '#f87171'
 
-  // ── Layout ─────────────────────────────────────────────────────────────────
-  const runLayout = useCallback((name: LayoutName, animate: boolean) => {
-    const cy = cyRef.current
-    if (!cy || !mountedRef.current) return
-
-    const n = cy.nodes().length
-
-    const opts: Record<string, unknown> = {
-      name,
-      animate,
-      animationDuration: 400,
-      fit: true,
-      padding: 32,
-    }
-
-    if (name === 'cose') {
-      opts.nodeRepulsion   = 6000
-      opts.idealEdgeLength = n > 100 ? 40 : 60
-      opts.nodeOverlap     = 10
-      opts.numIter         = n > 100 ? 300 : 800
-      opts.randomize       = n > 20
-      opts.gravity         = 0.3
-    }
-
-    cy.layout(opts as cytoscape.LayoutOptions).run()
-  }, [])
-
-  const handleLayoutChange = (name: LayoutName) => {
-    setActiveLayout(name)
-    runLayout(name, true)
-  }
-
-  // Init: no animation to avoid React StrictMode null-notify crash
-  const handleCyInit = useCallback((cy: cytoscape.Core) => {
-    cyRef.current = cy
-    cy.on('layoutstop', () => {
-      if (mountedRef.current) applyResultStyles()
+      return {
+        id,
+        label: id,
+        fill,
+        size: degreeSize(degree, maxDeg),
+        labelVisible: showLabels,
+        data: { degree },
+      }
     })
-    // Run initial layout without animation
-    runLayout(activeLayout, false)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])   // intentionally empty deps — runs once on mount
+  }, [parsedGraph, maxDeg, pathNodeSet, startNode, endNode, algorithm, showLabels])
 
-  // Re-run layout without animation when elements change (new file)
-  useEffect(() => {
-    const cy = cyRef.current
-    if (!cy || !mountedRef.current) return
-    runLayout(activeLayout, false)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parsedGraph])
+  // ── Build Reagraph edges ───────────────────────────────────────────────────
+  const graphEdges: GraphEdge[] = useMemo(() => {
+    if (!showEdges) return []
+
+    return parsedGraph.edges.map(e => {
+      const src  = e.data.source as string
+      const tgt  = e.data.target as string
+      const fwd  = `${src}-${tgt}`
+      const rev  = `${tgt}-${src}`
+      const isPath = pathEdgeSet.has(fwd) || pathEdgeSet.has(rev)
+      const isMst  = mstEdgeSet.has(fwd)  || mstEdgeSet.has(rev)
+
+      return {
+        id:     e.data.id as string,
+        source: src,
+        target: tgt,
+        fill:   isMst ? '#4ade80' : isPath ? '#22d3ee' : '#1e3a5f',
+        size:   isMst || isPath ? 2 : 0.7,
+      }
+    })
+  }, [parsedGraph, showEdges, pathEdgeSet, mstEdgeSet])
+
+  // ── Active set for dimming non-path nodes ──────────────────────────────────
+  const actives = useMemo<string[]>(() => {
+    if (!result || result.error || pathNodeSet.size === 0) return []
+    return Array.from(pathNodeSet)
+  }, [result, pathNodeSet])
+
+  // ── Node click ─────────────────────────────────────────────────────────────
+  const handleNodeClick = useCallback((node: GraphNode) => {
+    const degree = (node.data as { degree: number }).degree
+    let distance: string | null = null
+
+    if (result && !result.error && result.distances) {
+      const idx = parsedGraph.idToCompact.get(parseInt(node.id, 10))
+      if (idx !== undefined && result.distances[idx] !== undefined) {
+        const d = result.distances[idx]
+        distance = isFinite(d) && d < 1e14 ? d.toFixed(2) : '∞'
+      }
+    }
+    setSelectedNode({ id: node.id, degree, distance })
+  }, [result, parsedGraph])
 
   // ── Stats ──────────────────────────────────────────────────────────────────
+  const density = parsedGraph.totalEdges > 0 && parsedGraph.totalNodes > 1
+    ? (parsedGraph.totalEdges / (parsedGraph.totalNodes * (parsedGraph.totalNodes - 1))).toFixed(4)
+    : '0'
+
   const resultLabel = !result || result.error ? null
-    : algorithm === 'kruskal'                   ? `${(result.path?.length ?? 0) / 2} MST edges`
+    : algorithm === 'kruskal'                    ? `${(result.path?.length ?? 0) / 2} MST edges`
     : algorithm === 'bfs' || algorithm === 'dfs' ? `${result.path?.length ?? 0} nodes visited`
     : (result.path?.length ?? 0) > 0            ? `Path: ${result.path!.length} nodes`
     : null
 
-  const isDense = nodeCount > 100
-
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/20 overflow-hidden">
+    <div className="rounded-xl border border-zinc-800 overflow-hidden flex flex-col" style={{ background: '#0a0f1e' }}>
 
-      {/* ── Toolbar ── */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800/80 flex-wrap gap-2">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-mono-display text-zinc-500 uppercase tracking-widest">Graph</span>
-
-          <span className="text-xs font-mono-display text-zinc-600">
-            {parsedGraph.totalNodes.toLocaleString()} nodes · {parsedGraph.totalEdges.toLocaleString()} edges
+      {/* ── Top toolbar ── */}
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-zinc-800/80 flex-wrap gap-2"
+           style={{ background: '#0d1425' }}>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <span className="text-xs font-mono-display text-zinc-400 uppercase tracking-widest">Graph</span>
+          <span className="text-zinc-700 text-xs">·</span>
+          <span className="text-xs font-mono-display text-zinc-500">
+            {parsedGraph.totalNodes.toLocaleString()} nodes
+          </span>
+          <span className="text-zinc-700 text-xs">·</span>
+          <span className="text-xs font-mono-display text-zinc-500">
+            {parsedGraph.totalEdges.toLocaleString()} edges
           </span>
 
-          {parsedGraph.truncated && (
-            <span className="text-xs font-mono-display text-amber-400 bg-amber-950/30 border border-amber-800/40 px-2 py-0.5 rounded-full">
-              showing first {nodeCount}
+          {is3D && (
+            <span className="text-xs font-mono-display text-violet-400 bg-violet-950/40 border border-violet-800/50 px-2 py-0.5 rounded-full">
+              3D · WebGL
             </span>
           )}
-
+          {parsedGraph.truncated && (
+            <span className="text-xs font-mono-display text-amber-400 bg-amber-950/40 border border-amber-800/50 px-2 py-0.5 rounded-full">
+              showing first {nodeCount.toLocaleString()}
+            </span>
+          )}
           {resultLabel && (
-            <span className="text-xs font-mono-display text-cyan-400 bg-cyan-950/30 border border-cyan-800/40 px-2 py-0.5 rounded-full">
+            <span className="text-xs font-mono-display text-cyan-300 bg-cyan-950/40 border border-cyan-800/50 px-2 py-0.5 rounded-full">
               {resultLabel}
             </span>
           )}
@@ -268,14 +251,13 @@ export default function GraphView({ parsedGraph, result, algorithm, startNode, e
 
         {/* Controls */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          {/* Edge toggle for dense graphs */}
-          {isDense && (
+          {nodeCount > 100 && (
             <button
-              onClick={() => setShowEdges(e => !e)}
+              onClick={() => setShowEdges(v => !v)}
               className={[
-                'px-2.5 py-1 rounded text-xs font-mono-display transition-colors border',
+                'px-2.5 py-1 rounded text-xs font-mono-display border transition-colors',
                 showEdges
-                  ? 'bg-zinc-700/60 text-zinc-300 border-zinc-600'
+                  ? 'bg-zinc-700/60 text-zinc-200 border-zinc-600'
                   : 'text-zinc-500 border-zinc-800 hover:text-zinc-300',
               ].join(' ')}
             >
@@ -283,73 +265,144 @@ export default function GraphView({ parsedGraph, result, algorithm, startNode, e
             </button>
           )}
 
-          {/* Layout buttons */}
-          {(['cose', 'circle', 'grid', 'concentric'] as LayoutName[]).map(name => (
+          {LAYOUT_BUTTONS.map(({ id, label }) => (
             <button
-              key={name}
-              onClick={() => handleLayoutChange(name)}
+              key={id}
+              onClick={() => setLayoutMode(id)}
               className={[
-                'px-2.5 py-1 rounded text-xs font-mono-display transition-colors border',
-                activeLayout === name
-                  ? 'bg-zinc-700/80 text-zinc-100 border-zinc-500'
+                'px-2.5 py-1 rounded text-xs font-mono-display border transition-colors',
+                layoutMode === id
+                  ? id.includes('3d')
+                    ? 'bg-violet-900/60 text-violet-200 border-violet-700'
+                    : 'bg-zinc-700 text-zinc-100 border-zinc-500'
                   : 'text-zinc-500 border-zinc-800 hover:text-zinc-300 hover:border-zinc-700',
               ].join(' ')}
             >
-              {name}
+              {label}
             </button>
           ))}
 
           <button
-            onClick={() => cyRef.current?.fit(undefined, 32)}
-            className="px-2.5 py-1 rounded text-xs font-mono-display text-zinc-500 border border-zinc-800 hover:text-zinc-300 hover:border-zinc-700 ml-1"
+            onClick={() => graphRef.current?.fitNodesInView()}
+            className="px-2.5 py-1 rounded text-xs font-mono-display text-zinc-500 border border-zinc-800 hover:text-zinc-200 hover:border-zinc-600 ml-1"
           >
             fit
           </button>
+          <button
+            onClick={() => graphRef.current?.zoomIn()}
+            className="w-7 h-7 rounded text-xs font-mono-display text-zinc-400 border border-zinc-800 hover:text-zinc-200 hover:border-zinc-600 flex items-center justify-center"
+          >+</button>
+          <button
+            onClick={() => graphRef.current?.zoomOut()}
+            className="w-7 h-7 rounded text-xs font-mono-display text-zinc-400 border border-zinc-800 hover:text-zinc-200 hover:border-zinc-600 flex items-center justify-center"
+          >−</button>
         </div>
       </div>
 
-      {/* ── Dense graph notice ── */}
-      {isDense && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-amber-950/20 border-b border-amber-900/30">
-          <span className="text-amber-400 text-xs font-mono-display">⚠</span>
-          <span className="text-xs font-mono-display text-amber-400/80">
-            Large graph — labels hidden, edges simplified.
-            Use <span className="text-amber-300">hide edges</span> to see node clusters more clearly.
-          </span>
-        </div>
-      )}
+      {/* ── WebGL canvas ── */}
+      <div className="relative" style={{ height: '580px', background: '#020817' }}>
+        <GraphCanvas
+          ref={graphRef}
+          nodes={graphNodes}
+          edges={graphEdges}
+          layoutType={LAYOUT_TYPE[layoutMode] as Parameters<typeof GraphCanvas>[0]['layoutType']}
+          actives={actives.length > 0 ? actives : undefined}
+          theme={DARK_THEME as Parameters<typeof GraphCanvas>[0]['theme']}
+          onNodeClick={handleNodeClick}
+          onCanvasClick={() => setSelectedNode(null)}
+        />
 
-      {/* ── Legend ── */}
-      <div className="flex items-center gap-5 px-4 py-2 border-b border-zinc-800/40 flex-wrap">
-        <LegendItem color="#4ade80" border="#14532d" label="Start node" />
-        {algorithm === 'astar' && <LegendItem color="#f87171" border="#450a0a" label="End node" />}
-        {algorithm !== 'kruskal'
-          ? <LegendItem color="#22d3ee" border="#0e7490" label="Path" />
-          : <LegendItem color="#4ade80" border="#14532d" label="MST edge" />}
-        <LegendItem color="#475569" border="#334155" label="Node" />
-        <LegendItem color="#1e293b" border="#1e293b" label="Edge" />
+        {/* 3D mode hint */}
+        {is3D && (
+          <div className="absolute top-3 left-3 text-[10px] font-mono-display text-zinc-600 pointer-events-none">
+            drag to orbit · scroll to zoom · right-drag to pan
+          </div>
+        )}
+
+        {/* Node info panel */}
+        {selectedNode && (
+          <div
+            className="absolute bottom-4 right-4 rounded-lg border border-zinc-700/80 px-4 py-3 text-xs font-mono-display space-y-1.5 z-10"
+            style={{ background: 'rgba(13,20,37,0.95)', backdropFilter: 'blur(8px)' }}
+          >
+            <div className="flex items-center justify-between gap-6 mb-0.5">
+              <span className="text-zinc-400 uppercase tracking-widest text-[10px]">Node Info</span>
+              <button
+                onClick={() => setSelectedNode(null)}
+                className="text-zinc-600 hover:text-zinc-300 leading-none"
+              >×</button>
+            </div>
+            <div className="flex justify-between gap-8">
+              <span className="text-zinc-500">ID</span>
+              <span className="text-zinc-200">{selectedNode.id}</span>
+            </div>
+            <div className="flex justify-between gap-8">
+              <span className="text-zinc-500">Degree</span>
+              <span className="text-cyan-300">{selectedNode.degree}</span>
+            </div>
+            {selectedNode.distance !== null && (
+              <div className="flex justify-between gap-8">
+                <span className="text-zinc-500">Distance</span>
+                <span className="text-emerald-300">{selectedNode.distance}</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* ── Canvas ── */}
-      <CytoscapeComponent
-        elements={elements}
-        stylesheet={stylesheet}
-        style={{ width: '100%', height: '500px', background: '#020817' }}
-        cy={handleCyInit}
-        layout={{ name: 'preset' } as cytoscape.LayoutOptions}  // layout controlled manually
-      />
+      {/* ── Bottom stats + legend ── */}
+      <div className="flex items-center justify-between px-4 py-2 border-t border-zinc-800/80 flex-wrap gap-3"
+           style={{ background: '#0d1425' }}>
+        <div className="flex items-center gap-4 flex-wrap">
+          <StatPill label="renderer" value="WebGL" />
+          <StatPill label="max deg"  value={parsedGraph.maxDegree} />
+          <StatPill label="avg deg"  value={parsedGraph.avgDegree.toFixed(1)} />
+          <StatPill label="density"  value={density} />
+          {parsedGraph.truncated && (
+            <StatPill label="cap" value={MAX_DISPLAY_NODES.toLocaleString()} />
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <LegendItem color="#0891b2" bg="#0c1a2e" label="leaf"      />
+          <LegendItem color="#22d3ee" bg="#0f1f3d" label="mid"       />
+          <LegendItem color="#f59e0b" bg="#78350f" label="hub"       />
+          <LegendItem color="#f97316" bg="#7c2d12" label="super-hub" />
+          {result && !result.error && <>
+            <LegendItem color="#4ade80" bg="#14532d" label="start" />
+            {algorithm === 'astar' && (
+              <LegendItem color="#f87171" bg="#450a0a" label="end" />
+            )}
+            {algorithm === 'kruskal'
+              ? <LegendItem color="#4ade80" bg="#052e16" label="MST"  />
+              : <LegendItem color="#22d3ee" bg="#164e63" label="path" />
+            }
+          </>}
+        </div>
+      </div>
     </div>
   )
 }
 
-function LegendItem({ color, border, label }: { color: string; border: string; label: string }) {
+// ── Small helpers ───────────────────────────────────────────────────────────────
+
+function StatPill({ label, value }: { label: string; value: string | number }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="text-zinc-600 text-[10px] font-mono-display uppercase tracking-wider">{label}</span>
+      <span className="text-zinc-300 text-xs font-mono-display">{value}</span>
+    </span>
+  )
+}
+
+function LegendItem({ color, bg, label }: { color: string; bg: string; label: string }) {
   return (
     <span className="flex items-center gap-1.5">
       <span
         className="w-3 h-3 rounded-full flex-shrink-0"
-        style={{ backgroundColor: border, boxShadow: `0 0 0 1.5px ${color}` }}
+        style={{ background: bg, boxShadow: `0 0 0 1.5px ${color}` }}
       />
-      <span className="text-xs font-mono-display text-zinc-500">{label}</span>
+      <span className="text-[10px] font-mono-display text-zinc-500">{label}</span>
     </span>
   )
 }

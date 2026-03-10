@@ -12,7 +12,7 @@ import GraphView         from './components/GraphView'
 import { NEEDS_START, NEEDS_END, API_BASE } from './types'
 import type { Algorithm, FileFormat, MpiStatus, ApiResult } from './types'
 
-import { parseEdgeList, parseAdjacencyList } from './utils/parseGraph'
+import { parseGraph } from './utils/parseGraph'
 import type { ParsedGraph } from './utils/parseGraph'
 
 export default function App() {
@@ -41,13 +41,11 @@ export default function App() {
     if (!file) { setParsedGraph(null); return }
 
     const reader = new FileReader()
-    reader.onload = e => {
+    reader.onload = async e => {
       const content = e.target?.result as string
       if (!content) return
       try {
-        const graph = format === 'edgeList'
-          ? parseEdgeList(content)
-          : parseAdjacencyList(content)
+        const graph = await parseGraph(content, format)
         setParsedGraph(graph)
       } catch {
         setParsedGraph(null)
