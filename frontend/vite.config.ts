@@ -6,6 +6,10 @@ import topLevelAwait from 'vite-plugin-top-level-await'
 
 export default defineConfig({
   plugins: [react(), UnoCSS(), wasm(), topLevelAwait()],
+  worker: {
+    format: 'es',
+    plugins: () => [wasm()],
+  },
   css: {
     modules: {
       generateScopedName: 'css-[hash:6]',

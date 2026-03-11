@@ -6,75 +6,91 @@ export interface GraphElement {
 }
 
 export interface ParsedGraph {
-  nodes: GraphElement[]
-  edges: GraphElement[]
-  compactToId: number[]            // compact index → original node ID
-  idToCompact: Map<number, number> // original node ID → compact index
-  totalNodes: number
-  totalEdges: number
-  maxDegree: number
-  avgDegree: number
-  truncated: boolean
+  nodes:        GraphElement[]
+  edges:        GraphElement[]
+  /** Pre-computed undirected adjacency: nodeId → neighborId[] */
+  neighborMap:  Record<string, string[]>
+  compactToId:  number[]            // compact index → original node ID
+  idToCompact:  Map<number, number> // original node ID → compact index
+  totalNodes:   number
+  totalEdges:   number
+  maxDegree:    number
+  avgDegree:    number
+  truncated:    boolean
 }
 
-// ── WASM loader (optional) ─────────────────────────────────────────────────────
-// Build WASM with: cd wasm && wasm-pack build --target bundler --out-dir ../frontend/src/wasm-pkg
-// Then npm install -D vite-plugin-wasm vite-plugin-top-level-await
+// ── WASM loader ───────────────────────────────────────────────────────────────
 
-type WasmModule = {
+type WasmApi = {
   parse_edge_list(s: string): string
   parse_adjacency_list(s: string): string
+  build_neighbor_map(edges_json: string): string
+  build_path_sets(path_json: string, algorithm: string): string
+  compute_node_styles(
+    nodes_json: string, max_degree: number, algorithm: string,
+    pagerank_json: string, scc_json: string, path_nodes_json: string,
+    start_node: string, end_node: string,
+  ): string
+  compute_edge_styles(
+    edges_json: string, path_edge_set_json: string, mst_edge_set_json: string,
+  ): string
 }
-let wasmModule: WasmModule | null = null
 
-const wasmPromise = (async () => {
+let wasmApi: WasmApi | null = null
+
+export const wasmReady: Promise<void> = (async () => {
   try {
-    // Dynamic import so the app works even if WASM hasn't been built yet
-    const mod = await import('../wasm-pkg/graph_wasm.js' /* @vite-ignore */)
-    wasmModule = mod as unknown as WasmModule
+    const mod = await import('../wasm-pkg/graph_wasm.js')
+    wasmApi = mod as unknown as WasmApi
   } catch {
-    // WASM not built — JS fallback is used automatically
+    // WASM unavailable — JS fallback is used automatically
   }
 })()
 
-// ── Shared result shape from WASM ──────────────────────────────────────────────
+export function getWasm(): WasmApi | null { return wasmApi }
+
+// ── Shared WASM result shape ──────────────────────────────────────────────────
+
 interface WasmResult {
-  nodes: { id: string; label: string; degree: number }[]
-  edges: { id: string; source: string; target: string; weight: number }[]
-  total_nodes: number
-  total_edges: number
-  max_degree: number
-  avg_degree: number
-  truncated: boolean
+  nodes:        { id: string; label: string; degree: number }[]
+  edges:        { id: string; source: string; target: string; weight: number }[]
+  neighbor_map: Record<string, string[]>
+  total_nodes:  number
+  total_edges:  number
+  max_degree:   number
+  avg_degree:   number
+  truncated:    boolean
 }
 
 function wasmResultToParsed(r: WasmResult): ParsedGraph {
-  const compactToId: number[] = r.nodes.map(n => parseInt(n.id, 10))
+  const compactToId = r.nodes.map(n => parseInt(n.id, 10))
   const idToCompact = new Map(compactToId.map((id, i) => [id, i]))
 
-  const nodes: ElementDefinition[] = r.nodes.map(n => ({
+  const nodes: GraphElement[] = r.nodes.map(n => ({
     data: { id: n.id, label: n.label, degree: n.degree },
   }))
-  const edges: ElementDefinition[] = r.edges.map(e => ({
+  const edges: GraphElement[] = r.edges.map(e => ({
     data: { id: e.id, source: e.source, target: e.target, weight: e.weight },
   }))
 
   return {
-    nodes, edges, compactToId, idToCompact,
-    totalNodes: r.total_nodes,
-    totalEdges: r.total_edges,
-    maxDegree:  r.max_degree,
-    avgDegree:  r.avg_degree,
-    truncated:  r.truncated,
+    nodes, edges,
+    neighborMap:  r.neighbor_map,
+    compactToId,  idToCompact,
+    totalNodes:   r.total_nodes,
+    totalEdges:   r.total_edges,
+    maxDegree:    r.max_degree,
+    avgDegree:    r.avg_degree,
+    truncated:    r.truncated,
   }
 }
 
 // ── JS fallback parsers ────────────────────────────────────────────────────────
 
 function buildResult(
-  order: number[],
-  degrees: Map<number, number>,
-  rawEdges: { u: number; v: number; w: number }[],
+  order:     number[],
+  degrees:   Map<number, number>,
+  rawEdges:  { u: number; v: number; w: number }[],
 ): ParsedGraph {
   const totalNodes = order.length
   const totalEdges = rawEdges.length
@@ -82,30 +98,36 @@ function buildResult(
 
   const displayIds = new Set(order.slice(0, MAX_DISPLAY_NODES))
 
-  const degVals    = Array.from(degrees.values())
-  const maxDegree  = degVals.length ? Math.max(...degVals) : 1
-  const avgDegree  = degVals.length ? degVals.reduce((a, b) => a + b, 0) / degVals.length : 0
+  const degVals   = Array.from(degrees.values())
+  const maxDegree = degVals.length ? Math.max(...degVals) : 1
+  const avgDegree = degVals.length ? degVals.reduce((a, b) => a + b, 0) / degVals.length : 0
 
   const compactToId = order.slice(0, MAX_DISPLAY_NODES)
   const idToCompact = new Map(compactToId.map((id, i) => [id, i]))
 
-  const nodes: ElementDefinition[] = compactToId.map(id => ({
+  const nodes: GraphElement[] = compactToId.map(id => ({
     data: { id: String(id), label: String(id), degree: degrees.get(id) ?? 0 },
   }))
 
-  const edges: ElementDefinition[] = rawEdges
-    .filter(e => displayIds.has(e.u) && displayIds.has(e.v))
-    .map((e, i) => ({
-      data: { id: `e_${i}`, source: String(e.u), target: String(e.v), weight: e.w },
-    }))
+  const neighborMap: Record<string, string[]> = {}
+  for (const id of compactToId) neighborMap[String(id)] = []
 
-  return { nodes, edges, compactToId, idToCompact, totalNodes, totalEdges, maxDegree, avgDegree, truncated }
+  const edges: GraphElement[] = rawEdges
+    .filter(e => displayIds.has(e.u) && displayIds.has(e.v))
+    .map((e, i) => {
+      const us = String(e.u), vs = String(e.v)
+      neighborMap[us]?.push(vs)
+      neighborMap[vs]?.push(us)
+      return { data: { id: `e_${i}`, source: us, target: vs, weight: e.w } }
+    })
+
+  return { nodes, edges, neighborMap, compactToId, idToCompact, totalNodes, totalEdges, maxDegree, avgDegree, truncated }
 }
 
 function parseEdgeListJS(content: string): ParsedGraph {
   const degrees  = new Map<number, number>()
-  const order: number[] = []
-  const rawEdges: { u: number; v: number; w: number }[] = []
+  const order:     number[] = []
+  const rawEdges:  { u: number; v: number; w: number }[] = []
 
   for (const rawLine of content.split('\n')) {
     const line = rawLine.trim()
@@ -118,8 +140,8 @@ function parseEdgeListJS(content: string): ParsedGraph {
     if (isNaN(u) || isNaN(v)) continue
     if (!degrees.has(u)) { order.push(u); degrees.set(u, 0) }
     if (!degrees.has(v)) { order.push(v); degrees.set(v, 0) }
-    degrees.set(u, (degrees.get(u)! + 1))
-    degrees.set(v, (degrees.get(v)! + 1))
+    degrees.set(u, degrees.get(u)! + 1)
+    degrees.set(v, degrees.get(v)! + 1)
     rawEdges.push({ u, v, w })
   }
   return buildResult(order, degrees, rawEdges)
@@ -127,8 +149,8 @@ function parseEdgeListJS(content: string): ParsedGraph {
 
 function parseAdjacencyListJS(content: string): ParsedGraph {
   const degrees  = new Map<number, number>()
-  const order: number[] = []
-  const rawEdges: { u: number; v: number; w: number }[] = []
+  const order:     number[] = []
+  const rawEdges:  { u: number; v: number; w: number }[] = []
 
   for (const rawLine of content.split('\n')) {
     const line = rawLine.trim()
@@ -145,8 +167,8 @@ function parseAdjacencyListJS(content: string): ParsedGraph {
       const w = wStr !== undefined ? parseFloat(wStr) : 1.0
       if (isNaN(v)) continue
       if (!degrees.has(v)) { order.push(v); degrees.set(v, 0) }
-      degrees.set(u, (degrees.get(u)! + 1))
-      degrees.set(v, (degrees.get(v)! + 1))
+      degrees.set(u, degrees.get(u)! + 1)
+      degrees.set(v, degrees.get(v)! + 1)
       rawEdges.push({ u, v, w })
     }
   }
@@ -159,13 +181,13 @@ export async function parseGraph(
   content: string,
   format: 'edgeList' | 'adjacencyList',
 ): Promise<ParsedGraph> {
-  await wasmPromise // wait for WASM to finish loading (fast if already done)
+  await wasmReady
 
-  if (wasmModule) {
+  if (wasmApi) {
     try {
       const json = format === 'edgeList'
-        ? wasmModule.parse_edge_list(content)
-        : wasmModule.parse_adjacency_list(content)
+        ? wasmApi.parse_edge_list(content)
+        : wasmApi.parse_adjacency_list(content)
       return wasmResultToParsed(JSON.parse(json) as WasmResult)
     } catch {
       // fall through to JS
