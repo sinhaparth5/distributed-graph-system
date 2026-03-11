@@ -1,9 +1,26 @@
 services:
+
+  # ── Frontend (React + Vite → nginx) ──────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Browser must reach the backend — use the host-exposed port
+        VITE_API_BASE: http://localhost:8000
+    ports:
+      - "3000:80"
+    depends_on:
+      - mpi-master
+    networks:
+      - mpi-network
+    restart: unless-stopped
+
+  # ── Backend master (Rocket web server + MPI rank 0) ───────────────────────────
   mpi-master:
     build: .
     volumes:
       - ./:/app
-      - ./temp:/app/temp  # Explicit volume for temp files
+      - ./temp:/app/temp
     environment:
       - OMPI_ALLOW_RUN_AS_ROOT=1
       - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
@@ -12,15 +29,18 @@ services:
       - "8000:8000"
     hostname: mpi-master
     networks:
-      - mpi-network
+      mpi-network:
+        ipv4_address: 172.28.1.2
     extra_hosts:
       - "mpi-worker:172.28.1.3"
+    restart: unless-stopped
 
+  # ── Backend worker (MPI rank 1+) ──────────────────────────────────────────────
   mpi-worker:
     build: .
     volumes:
       - ./:/app
-      - ./temp:/app/temp  # Explicit volume for temp files
+      - ./temp:/app/temp
     environment:
       - OMPI_ALLOW_RUN_AS_ROOT=1
       - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
@@ -29,9 +49,11 @@ services:
       - mpi-master
     hostname: mpi-worker
     networks:
-      - mpi-network
+      mpi-network:
+        ipv4_address: 172.28.1.3
     extra_hosts:
       - "mpi-master:172.28.1.2"
+    restart: unless-stopped
 
 networks:
   mpi-network:
