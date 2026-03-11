@@ -18,6 +18,9 @@ pub enum GraphTaskType {
     AStar { start_node: usize, goal_node: usize },
     BellmanFord { start_node: usize },
     Kruskal,
+    PageRank { damping: f64, iterations: u32 },
+    SCC,
+    TopologicalSort,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -31,6 +34,8 @@ pub struct TaskResult {
     pub path: Option<Vec<usize>>,
     pub distances: Option<Vec<f64>>,
     pub has_negative_cycle: Option<bool>,
+    pub components: Option<Vec<Vec<usize>>>,
+    pub scores: Option<Vec<(usize, f64)>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -272,12 +277,14 @@ impl MPIProcessor {
                         path: Some(Vec::new()),
                         distances: Some(Vec::new()),
                         has_negative_cycle: None,
+                        components: None,
+                        scores: None,
                     }
                 }
             }
         }
     }
-    
+
     // Master process: partition graph, distribute work, collect results
     fn execute_master(&self, graph: &Graph, task_type: GraphTaskType) -> TaskResult {
         // Only call this in distributed mode
@@ -319,9 +326,11 @@ impl MPIProcessor {
                     path: Some(Vec::new()),
                     distances: Some(Vec::new()),
                     has_negative_cycle: None,
+                    components: None,
+                    scores: None,
                 }
             };
-            
+
             // Collect results from workers
             for i in 1..self.get_size() {
                 if i as usize >= partitions.len() {
@@ -357,7 +366,7 @@ impl MPIProcessor {
                 Ok(t) => t,
                 Err(e) => {
                     eprintln!("[MPI] Worker {} failed to deserialise task: {}", self.get_rank(), e);
-                    let empty = TaskResult { path: Some(vec![]), distances: None, has_negative_cycle: None };
+                    let empty = TaskResult { path: Some(vec![]), distances: None, has_negative_cycle: None, components: None, scores: None };
                     let serialized = serialize(&empty).unwrap_or_default();
                     world.process_at_rank(0).send(&serialized[..]);
                     return empty;
@@ -372,7 +381,7 @@ impl MPIProcessor {
                 self.process_task(&task)
             })).unwrap_or_else(|e| {
                 eprintln!("[MPI] Worker {} task panicked: {:?}", self.get_rank(), e);
-                TaskResult { path: Some(vec![]), distances: None, has_negative_cycle: None }
+                TaskResult { path: Some(vec![]), distances: None, has_negative_cycle: None, components: None, scores: None }
             });
 
             let serialized = serialize(&result).expect("Failed to serialise result");
@@ -396,6 +405,8 @@ impl MPIProcessor {
                     path: Some(path),
                     distances: None,
                     has_negative_cycle: None,
+                    components: None,
+                    scores: None,
                 }
             },
             GraphTaskType::BFS { start_node } => {
@@ -404,6 +415,8 @@ impl MPIProcessor {
                     path: Some(path),
                     distances: None,
                     has_negative_cycle: None,
+                    components: None,
+                    scores: None,
                 }
             },
             GraphTaskType::Dijkstra { start_node } => {
@@ -412,6 +425,8 @@ impl MPIProcessor {
                     path: Some(path),
                     distances: Some(distances),
                     has_negative_cycle: None,
+                    components: None,
+                    scores: None,
                 }
             },
             GraphTaskType::AStar { start_node, goal_node } => {
@@ -420,6 +435,8 @@ impl MPIProcessor {
                     path: Some(path),
                     distances: None,
                     has_negative_cycle: None,
+                    components: None,
+                    scores: None,
                 }
             },
             GraphTaskType::BellmanFord { start_node } => {
@@ -428,6 +445,8 @@ impl MPIProcessor {
                     path: None,
                     distances: Some(distances),
                     has_negative_cycle: Some(has_negative_cycle),
+                    components: None,
+                    scores: None,
                 }
             },
             GraphTaskType::Kruskal => {
@@ -436,7 +455,23 @@ impl MPIProcessor {
                     path: Some(mst),
                     distances: None,
                     has_negative_cycle: None,
+                    components: None,
+                    scores: None,
                 }
+            },
+            GraphTaskType::PageRank { damping, iterations } => {
+                let scores = graph.pagerank(*damping, *iterations);
+                TaskResult { path: None, distances: None, has_negative_cycle: None, components: None, scores: Some(scores) }
+            },
+            GraphTaskType::SCC => {
+                let comps = graph.scc();
+                // Also flatten into path so frontend can highlight nodes
+                let path: Vec<usize> = comps.iter().flat_map(|c| c.iter().copied()).collect();
+                TaskResult { path: Some(path), distances: None, has_negative_cycle: None, components: Some(comps), scores: None }
+            },
+            GraphTaskType::TopologicalSort => {
+                let order = graph.topological_sort().unwrap_or_default();
+                TaskResult { path: Some(order), distances: None, has_negative_cycle: None, components: None, scores: None }
             },
         }
     }
@@ -460,6 +495,16 @@ impl MPIProcessor {
         if let Some(worker_cycle) = worker_result.has_negative_cycle {
             master_result.has_negative_cycle = Some(worker_cycle);
         }
+        if let Some(worker_comps) = &worker_result.components {
+            if !worker_comps.is_empty() {
+                master_result.components = Some(worker_comps.clone());
+            }
+        }
+        if let Some(worker_scores) = &worker_result.scores {
+            if !worker_scores.is_empty() {
+                master_result.scores = Some(worker_scores.clone());
+            }
+        }
     }
     
     // Clone task type for sending to workers
@@ -472,6 +517,9 @@ impl MPIProcessor {
                 GraphTaskType::AStar { start_node: *start_node, goal_node: *goal_node },
             GraphTaskType::BellmanFord { start_node } => GraphTaskType::BellmanFord { start_node: *start_node },
             GraphTaskType::Kruskal => GraphTaskType::Kruskal,
+            GraphTaskType::PageRank { damping, iterations } => GraphTaskType::PageRank { damping: *damping, iterations: *iterations },
+            GraphTaskType::SCC => GraphTaskType::SCC,
+            GraphTaskType::TopologicalSort => GraphTaskType::TopologicalSort,
         }
     }
 }

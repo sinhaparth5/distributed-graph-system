@@ -35,6 +35,9 @@ pub fn run_distributed_algorithm(
         },
         "bellman-ford" => GraphTaskType::BellmanFord { start_node: start_node.unwrap_or(0) },
         "kruskal"      => GraphTaskType::Kruskal,
+        "pagerank"         => GraphTaskType::PageRank { damping: 0.85, iterations: 30 },
+        "scc"              => GraphTaskType::SCC,
+        "topological-sort" => GraphTaskType::TopologicalSort,
         _              => return Err(format!("Unsupported algorithm: {}", algorithm)),
     };
 

@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use distributed_graph_system::file_processor::FileFormat;
+use distributed_graph_system::file_processor::process_file;
 use distributed_graph_system::distributed_processor::run_distributed_algorithm;
 use distributed_graph_system::mpi_processor::MPIProcessor;
 
@@ -47,6 +48,9 @@ struct ProcessResponse {
     result: String,
     path: Option<Vec<usize>>,
     distances: Option<Vec<f64>>,
+    has_negative_cycle: Option<bool>,
+    components: Option<Vec<Vec<usize>>>,
+    scores: Option<Vec<(usize, f64)>>,
     error: Option<String>,
     mpi_processes: usize,
     mpi_mode: String,
@@ -105,6 +109,7 @@ async fn process_graph_file<'f>(
         Err(e) => return Json(ProcessResponse {
             result: "error".to_string(),
             path: None, distances: None,
+            has_negative_cycle: None, components: None, scores: None,
             error: Some(format!("Invalid request JSON: {}", e)),
             mpi_processes: mpi.get_size() as usize,
             mpi_mode: mpi.mode_name().to_string(),
@@ -118,6 +123,7 @@ async fn process_graph_file<'f>(
         return Json(ProcessResponse {
             result: "error".to_string(),
             path: None, distances: None,
+            has_negative_cycle: None, components: None, scores: None,
             error: Some(format!("Failed to save file: {}", e)),
             mpi_processes: mpi.get_size() as usize,
             mpi_mode: mpi.mode_name().to_string(),
@@ -163,6 +169,9 @@ async fn process_graph_file<'f>(
                 result: message.to_string(),
                 path: algo.task_result.path,
                 distances: algo.task_result.distances,
+                has_negative_cycle: algo.task_result.has_negative_cycle,
+                components: algo.task_result.components,
+                scores: algo.task_result.scores,
                 error: None,
                 mpi_processes: algo.mpi_processes,
                 mpi_mode: algo.mpi_mode,
@@ -171,6 +180,7 @@ async fn process_graph_file<'f>(
         Ok(Err(e)) => Json(ProcessResponse {
             result: "error".to_string(),
             path: None, distances: None,
+            has_negative_cycle: None, components: None, scores: None,
             error: Some(e),
             mpi_processes: mpi.get_size() as usize,
             mpi_mode: mpi.mode_name().to_string(),
@@ -178,9 +188,97 @@ async fn process_graph_file<'f>(
         Err(e) => Json(ProcessResponse {
             result: "error".to_string(),
             path: None, distances: None,
+            has_negative_cycle: None, components: None, scores: None,
             error: Some(format!("Task panicked: {}", e)),
             mpi_processes: mpi.get_size() as usize,
             mpi_mode: mpi.mode_name().to_string(),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct HubInfo {
+    id: usize,
+    degree: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct GraphMetricsResponse {
+    node_count: usize,
+    edge_count: usize,
+    density: f64,
+    connected_components: usize,
+    is_dag: bool,
+    avg_degree: f64,
+    top_hubs: Vec<HubInfo>,
+    error: Option<String>,
+}
+
+#[derive(Debug, FromForm)]
+struct MetricsForm<'f> {
+    file: TempFile<'f>,
+    file_format: String,
+}
+
+#[post("/graph_metrics", data = "<form>")]
+async fn graph_metrics_route<'f>(
+    mut form: Form<MetricsForm<'f>>,
+) -> Json<GraphMetricsResponse> {
+    let fmt_str = form.file_format.trim().to_string();
+    let file_format = match fmt_str.as_str() {
+        "edgeList"      => distributed_graph_system::file_processor::FileFormat::EdgeList,
+        "adjacencyList" => distributed_graph_system::file_processor::FileFormat::AdjacencyList,
+        other => return Json(GraphMetricsResponse {
+            node_count: 0, edge_count: 0, density: 0.0,
+            connected_components: 0, is_dag: false, avg_degree: 0.0,
+            top_hubs: vec![],
+            error: Some(format!("Unknown file_format: {}", other)),
+        }),
+    };
+
+    let temp_path = PathBuf::from("/tmp")
+        .join(format!("metrics_{}.txt", uuid::Uuid::new_v4()));
+    if let Err(e) = form.file.persist_to(&temp_path).await {
+        return Json(GraphMetricsResponse {
+            node_count: 0, edge_count: 0, density: 0.0,
+            connected_components: 0, is_dag: false, avg_degree: 0.0,
+            top_hubs: vec![],
+            error: Some(format!("Failed to save file: {}", e)),
+        });
+    }
+
+    let path_str = temp_path.to_str().unwrap().to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        process_file(&path_str, file_format)
+    }).await;
+    let _ = std::fs::remove_file(&temp_path);
+
+    match result {
+        Ok(Ok(graph)) => {
+            let n = graph.node_count();
+            let e = graph.edge_count();
+            let density = if n > 1 { e as f64 / (n * (n - 1)) as f64 } else { 0.0 };
+            let cc = graph.connected_components();
+            let is_dag = graph.topological_sort().is_some();
+            let avg = if n > 0 { e as f64 / n as f64 } else { 0.0 };
+            let hubs = graph.top_hubs(5).into_iter()
+                .map(|(id, deg)| HubInfo { id, degree: deg })
+                .collect();
+            Json(GraphMetricsResponse {
+                node_count: n, edge_count: e, density,
+                connected_components: cc, is_dag, avg_degree: avg,
+                top_hubs: hubs, error: None,
+            })
+        },
+        Ok(Err(e)) => Json(GraphMetricsResponse {
+            node_count: 0, edge_count: 0, density: 0.0,
+            connected_components: 0, is_dag: false, avg_degree: 0.0,
+            top_hubs: vec![], error: Some(format!("{}", e)),
+        }),
+        Err(e) => Json(GraphMetricsResponse {
+            node_count: 0, edge_count: 0, density: 0.0,
+            connected_components: 0, is_dag: false, avg_degree: 0.0,
+            top_hubs: vec![], error: Some(format!("{}", e)),
         }),
     }
 }
@@ -215,7 +313,8 @@ fn main() {
                     .attach(CORS)
                     .manage(mpi)
                     .mount("/", routes![
-                        index, health_check, mpi_status, process_graph_file, options
+                        index, health_check, mpi_status, process_graph_file,
+                        graph_metrics_route, options
                     ])
                     .launch()
                     .await

@@ -445,6 +445,158 @@ impl Graph {
         path.reverse();
         path
     }
+
+    // ── Undirected connected components ────────────────────────────────────
+    pub fn connected_components(&self) -> usize {
+        let mut visited: HashSet<usize> = HashSet::new();
+        let mut count = 0;
+        for &start in self.nodes.keys() {
+            if visited.contains(&start) { continue; }
+            count += 1;
+            let mut queue = VecDeque::new();
+            visited.insert(start);
+            queue.push_back(start);
+            while let Some(n) = queue.pop_front() {
+                if let Some(neighbors) = self.adj_list.get(&n) {
+                    for &(next, _) in neighbors {
+                        if !visited.contains(&next) {
+                            visited.insert(next);
+                            queue.push_back(next);
+                        }
+                    }
+                }
+            }
+        }
+        count
+    }
+
+    // ── Top nodes by out-degree ─────────────────────────────────────────────
+    pub fn top_hubs(&self, n: usize) -> Vec<(usize, usize)> {
+        let mut degrees: Vec<(usize, usize)> = self.adj_list.iter()
+            .map(|(&id, neighbors)| (id, neighbors.len()))
+            .collect();
+        degrees.sort_by(|a, b| b.1.cmp(&a.1));
+        degrees.truncate(n);
+        degrees
+    }
+
+    // ── PageRank (iterative, with dangling-node handling) ───────────────────
+    pub fn pagerank(&self, damping: f64, iterations: u32) -> Vec<(usize, f64)> {
+        let n = self.nodes.len();
+        if n == 0 { return Vec::new(); }
+
+        let init = 1.0 / n as f64;
+        let mut rank: HashMap<usize, f64> = self.nodes.keys().map(|&k| (k, init)).collect();
+
+        for _ in 0..iterations {
+            let mut new_rank: HashMap<usize, f64> = self.nodes.keys()
+                .map(|&k| (k, (1.0 - damping) / n as f64))
+                .collect();
+
+            // Dangling nodes spread their rank equally to all nodes
+            let dangling: f64 = self.nodes.keys()
+                .filter(|&&id| self.adj_list.get(&id).map_or(true, |v| v.is_empty()))
+                .map(|&id| rank[&id])
+                .sum::<f64>() * damping / n as f64;
+            for r in new_rank.values_mut() { *r += dangling; }
+
+            for (&node, neighbors) in &self.adj_list {
+                if neighbors.is_empty() { continue; }
+                let contribution = damping * rank[&node] / neighbors.len() as f64;
+                for &(next, _) in neighbors {
+                    if let Some(r) = new_rank.get_mut(&next) { *r += contribution; }
+                }
+            }
+            rank = new_rank;
+        }
+
+        let mut sorted: Vec<(usize, f64)> = rank.into_iter().collect();
+        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        sorted
+    }
+
+    // ── Topological Sort (Kahn's algorithm) ─────────────────────────────────
+    /// Returns `None` if the graph contains a cycle.
+    pub fn topological_sort(&self) -> Option<Vec<usize>> {
+        let mut in_degree: HashMap<usize, usize> = self.nodes.keys().map(|&k| (k, 0)).collect();
+        for neighbors in self.adj_list.values() {
+            for &(next, _) in neighbors {
+                *in_degree.entry(next).or_insert(0) += 1;
+            }
+        }
+
+        let mut queue: VecDeque<usize> = in_degree.iter()
+            .filter(|(_, &d)| d == 0)
+            .map(|(&id, _)| id)
+            .collect();
+
+        let mut order = Vec::with_capacity(self.nodes.len());
+        while let Some(node) = queue.pop_front() {
+            order.push(node);
+            if let Some(neighbors) = self.adj_list.get(&node) {
+                for &(next, _) in neighbors {
+                    let deg = in_degree.get_mut(&next).unwrap();
+                    *deg -= 1;
+                    if *deg == 0 { queue.push_back(next); }
+                }
+            }
+        }
+
+        if order.len() == self.nodes.len() { Some(order) } else { None }
+    }
+
+    // ── Strongly Connected Components (Kosaraju — iterative DFS) ────────────
+    pub fn scc(&self) -> Vec<Vec<usize>> {
+        // Pass 1: iterative DFS, record finish order
+        let mut visited: HashSet<usize> = HashSet::new();
+        let mut finish: Vec<usize> = Vec::new();
+        for &start in self.nodes.keys() {
+            if visited.contains(&start) { continue; }
+            let mut stk: Vec<(usize, bool)> = vec![(start, false)];
+            while let Some((node, post)) = stk.pop() {
+                if post { finish.push(node); continue; }
+                if visited.contains(&node) { continue; }
+                visited.insert(node);
+                stk.push((node, true));
+                if let Some(neighbors) = self.adj_list.get(&node) {
+                    for &(next, _) in neighbors {
+                        if !visited.contains(&next) { stk.push((next, false)); }
+                    }
+                }
+            }
+        }
+
+        // Build reverse adjacency list
+        let mut rev: HashMap<usize, Vec<usize>> = self.nodes.keys()
+            .map(|&id| (id, Vec::new()))
+            .collect();
+        for (&from, neighbors) in &self.adj_list {
+            for &(to, _) in neighbors {
+                rev.entry(to).or_insert_with(Vec::new).push(from);
+            }
+        }
+
+        // Pass 2: DFS on reversed graph in reverse-finish order
+        let mut visited2: HashSet<usize> = HashSet::new();
+        let mut components: Vec<Vec<usize>> = Vec::new();
+        while let Some(start) = finish.pop() {
+            if visited2.contains(&start) { continue; }
+            let mut component: Vec<usize> = Vec::new();
+            let mut stk: Vec<usize> = vec![start];
+            while let Some(node) = stk.pop() {
+                if visited2.contains(&node) { continue; }
+                visited2.insert(node);
+                component.push(node);
+                if let Some(neighbors) = rev.get(&node) {
+                    for &next in neighbors {
+                        if !visited2.contains(&next) { stk.push(next); }
+                    }
+                }
+            }
+            components.push(component);
+        }
+        components
+    }
 }
 
 // ── Union-Find (compact indices only) ─────────────────────────────────────────
