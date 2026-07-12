@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Generated WASM artifacts (built by `pnpm run build:wasm`)
+src/wasm-pkg
+wasm/target

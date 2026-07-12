@@ -5,14 +5,11 @@ services:
     build:
       context: ./frontend
       args:
-        # Browser must reach the backend — use the host-exposed port
-        VITE_API_BASE: http://localhost:8000
+        # Browser must reach the backend — use the host-exposed port.
+        # Override for remote access: API_BASE=http://<server-ip>:8000 docker compose up --build
+        VITE_API_BASE: ${API_BASE:-http://localhost:8000}
     ports:
       - "3000:80"
-    depends_on:
-      - mpi-master
-    networks:
-      - mpi-network
     restart: unless-stopped
 
   # ── Backend master (Rocket web server + MPI rank 0) ───────────────────────────
@@ -29,10 +26,7 @@ services:
       - "8000:8000"
     hostname: mpi-master
     networks:
-      mpi-network:
-        ipv4_address: 172.28.1.2
-    extra_hosts:
-      - "mpi-worker:172.28.1.3"
+      - mpi-network
     restart: unless-stopped
 
   # ── Backend worker (MPI rank 1+) ──────────────────────────────────────────────
@@ -49,15 +43,11 @@ services:
       - mpi-master
     hostname: mpi-worker
     networks:
-      mpi-network:
-        ipv4_address: 172.28.1.3
-    extra_hosts:
-      - "mpi-master:172.28.1.2"
+      - mpi-network
     restart: unless-stopped
 
+# Docker's embedded DNS resolves "mpi-master" / "mpi-worker" on this network,
+# which is all the MPI hostfile and SSH need — no static IPs or extra_hosts required.
 networks:
   mpi-network:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.1.0/24

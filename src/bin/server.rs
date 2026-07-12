@@ -160,8 +160,11 @@ async fn process_graph_file<'f>(
                         "Bellman-Ford completed"
                     }
                 },
-                "kruskal" => "Kruskal's MST completed",
-                _         => "Algorithm completed",
+                "kruskal"          => "Kruskal's MST completed",
+                "pagerank"         => "PageRank completed",
+                "scc"              => "SCC completed",
+                "topological-sort" => "Topological sort completed",
+                _                  => "Algorithm completed",
             };
             println!("[MPI] {} — {} process(es), {} mode",
                      message, algo.mpi_processes, algo.mpi_mode);

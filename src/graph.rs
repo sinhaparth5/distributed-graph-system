@@ -30,13 +30,13 @@ impl Eq for OrderedFloat {}
 
 impl PartialOrd for OrderedFloat {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.0.partial_cmp(&other.0)
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for OrderedFloat {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+        self.0.partial_cmp(&other.0).unwrap_or(Ordering::Equal)
     }
 }
 
@@ -60,6 +60,10 @@ pub struct Graph {
     id_to_compact: HashMap<usize, usize>,
 }
 
+impl Default for Graph {
+    fn default() -> Self { Self::new() }
+}
+
 impl Graph {
     pub fn new() -> Self {
         Graph {
@@ -80,7 +84,7 @@ impl Graph {
             let compact_idx = self.compact_to_id.len();
             self.compact_to_id.push(node_id);
             self.id_to_compact.insert(node_id, compact_idx);
-            self.adj_list.entry(node_id).or_insert_with(Vec::new);
+            self.adj_list.entry(node_id).or_default();
         }
         self.nodes.insert(node_id, node);
     }
@@ -91,7 +95,7 @@ impl Graph {
         }
         self.adj_list
             .entry(edge.from)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push((edge.to, edge.weight));
     }
 
@@ -251,7 +255,9 @@ impl Graph {
     /// Returns (distances, path).
     /// `distances` is a compact Vec indexed 0..num_nodes (safe for any node ID size).
     /// Use `compact_to_original_id` to map index back to original node ID.
-    pub fn dijkstra(&self, start: usize) -> (Vec<f64>, Vec<usize>) {
+    /// `path` is the shortest start→goal route (original node IDs) when `goal`
+    /// is given and reachable; empty when unreachable; `[start]` with no goal.
+    pub fn dijkstra(&self, start: usize, goal: Option<usize>) -> (Vec<f64>, Vec<usize>) {
         if !self.nodes.contains_key(&start) {
             return (Vec::new(), Vec::new());
         }
@@ -291,7 +297,15 @@ impl Graph {
             }
         }
 
-        let path = self.reconstruct_path(&previous, start);
+        let path = match goal {
+            Some(goal) => {
+                let reachable = distances.get(&goal).copied()
+                    .unwrap_or(f64::INFINITY)
+                    .is_finite();
+                if reachable { self.reconstruct_path(&previous, goal) } else { Vec::new() }
+            }
+            None => vec![start],
+        };
         (dist_vec, path)
     }
 
@@ -424,9 +438,11 @@ impl Graph {
         &self.compact_to_id
     }
 
-    fn reconstruct_path(&self, previous: &HashMap<usize, Option<usize>>, start: usize) -> Vec<usize> {
-        let mut path = vec![start];
-        let mut current = start;
+    /// Walks predecessor links backwards from `target`, returning the path in
+    /// forward (source → target) order.
+    fn reconstruct_path(&self, previous: &HashMap<usize, Option<usize>>, target: usize) -> Vec<usize> {
+        let mut path = vec![target];
+        let mut current = target;
         while let Some(Some(prev)) = previous.get(&current) {
             path.push(*prev);
             current = *prev;
@@ -475,7 +491,7 @@ impl Graph {
         let mut degrees: Vec<(usize, usize)> = self.adj_list.iter()
             .map(|(&id, neighbors)| (id, neighbors.len()))
             .collect();
-        degrees.sort_by(|a, b| b.1.cmp(&a.1));
+        degrees.sort_by_key(|&(_, degree)| std::cmp::Reverse(degree));
         degrees.truncate(n);
         degrees
     }
@@ -495,7 +511,7 @@ impl Graph {
 
             // Dangling nodes spread their rank equally to all nodes
             let dangling: f64 = self.nodes.keys()
-                .filter(|&&id| self.adj_list.get(&id).map_or(true, |v| v.is_empty()))
+                .filter(|&&id| self.adj_list.get(&id).is_none_or(|v| v.is_empty()))
                 .map(|&id| rank[&id])
                 .sum::<f64>() * damping / n as f64;
             for r in new_rank.values_mut() { *r += dangling; }
@@ -572,7 +588,7 @@ impl Graph {
             .collect();
         for (&from, neighbors) in &self.adj_list {
             for &(to, _) in neighbors {
-                rev.entry(to).or_insert_with(Vec::new).push(from);
+                rev.entry(to).or_default().push(from);
             }
         }
 

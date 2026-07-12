@@ -2,10 +2,9 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react-swc'
 import UnoCSS from 'unocss/vite'
 import wasm from 'vite-plugin-wasm'
-import topLevelAwait from 'vite-plugin-top-level-await'
 
 export default defineConfig({
-  plugins: [react(), UnoCSS(), wasm(), topLevelAwait()],
+  plugins: [react(), UnoCSS(), wasm()],
   worker: {
     format: 'es',
     plugins: () => [wasm()],
@@ -16,6 +15,9 @@ export default defineConfig({
     },
   },
   build: {
+    // Native top-level await — required by vite-plugin-wasm without the
+    // vite-plugin-top-level-await transform
+    target: 'esnext',
     rollupOptions: {
       output: {
         entryFileNames: '_components/js/[hash].js',

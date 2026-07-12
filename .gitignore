@@ -27,3 +27,5 @@ Cargo.lock
 
 # Temp folder
 temp
+
+.codegraph

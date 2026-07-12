@@ -1,7 +1,6 @@
-use mpi::point_to_point::{Source, Status};
+use mpi::point_to_point::Status;
 use mpi::topology::Rank;
 use mpi::traits::*;
-use mpi::{self, request::WaitGuard};
 use serde::{Deserialize, Serialize};
 use bincode::{serialize, deserialize};
 use mpi::environment::Threading;
@@ -10,11 +9,11 @@ use crate::graph::{Graph, Edge, Node, NodeFeatures};
 use std::collections::HashMap;
 
 // Serializable message types for MPI communication
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GraphTaskType {
     DFS { start_node: usize },
     BFS { start_node: usize },
-    Dijkstra { start_node: usize },
+    Dijkstra { start_node: usize, end_node: Option<usize> },
     AStar { start_node: usize, goal_node: usize },
     BellmanFord { start_node: usize },
     Kruskal,
@@ -302,7 +301,7 @@ impl MPIProcessor {
             for (i, partition) in partitions.iter().enumerate().skip(1) {
                 if i < self.get_size() as usize {
                     let task = GraphTask {
-                        task_type: self.clone_task_type(&task_type),
+                        task_type: task_type.clone(),
                         graph_partition: partition.clone(),
                     };
                     
@@ -318,7 +317,7 @@ impl MPIProcessor {
             // Process the first partition in the master process
             let mut master_result = if !partitions.is_empty() {
                 self.process_task(&GraphTask {
-                    task_type: self.clone_task_type(&task_type),
+                    task_type: task_type.clone(),
                     graph_partition: partitions[0].clone(),
                 })
             } else {
@@ -419,8 +418,8 @@ impl MPIProcessor {
                     scores: None,
                 }
             },
-            GraphTaskType::Dijkstra { start_node } => {
-                let (distances, path) = graph.dijkstra(*start_node);
+            GraphTaskType::Dijkstra { start_node, end_node } => {
+                let (distances, path) = graph.dijkstra(*start_node, *end_node);
                 TaskResult {
                     path: Some(path),
                     distances: Some(distances),
@@ -504,22 +503,6 @@ impl MPIProcessor {
             if !worker_scores.is_empty() {
                 master_result.scores = Some(worker_scores.clone());
             }
-        }
-    }
-    
-    // Clone task type for sending to workers
-    fn clone_task_type(&self, task_type: &GraphTaskType) -> GraphTaskType {
-        match task_type {
-            GraphTaskType::DFS { start_node } => GraphTaskType::DFS { start_node: *start_node },
-            GraphTaskType::BFS { start_node } => GraphTaskType::BFS { start_node: *start_node },
-            GraphTaskType::Dijkstra { start_node } => GraphTaskType::Dijkstra { start_node: *start_node },
-            GraphTaskType::AStar { start_node, goal_node } => 
-                GraphTaskType::AStar { start_node: *start_node, goal_node: *goal_node },
-            GraphTaskType::BellmanFord { start_node } => GraphTaskType::BellmanFord { start_node: *start_node },
-            GraphTaskType::Kruskal => GraphTaskType::Kruskal,
-            GraphTaskType::PageRank { damping, iterations } => GraphTaskType::PageRank { damping: *damping, iterations: *iterations },
-            GraphTaskType::SCC => GraphTaskType::SCC,
-            GraphTaskType::TopologicalSort => GraphTaskType::TopologicalSort,
         }
     }
 }

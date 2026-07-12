@@ -225,8 +225,7 @@ distributed-graph-system/
 ├── compose.yml                   # Master + worker containers on private network
 ├── hostfile                      # MPI hostfile: mpi-master(1) + mpi-worker(1)
 ├── supervisor-master.conf        # Builds binary, waits for worker, runs mpirun
-├── supervisor-worker.conf        # Runs sshd only (binary launched by mpirun)
-└── test_graph.txt                # 8-node weighted graph for quick testing
+└── supervisor-worker.conf        # Runs sshd only (binary launched by mpirun)
 ```
 
 ---
@@ -244,19 +243,6 @@ The `data/twitter/` directory contains the [Stanford SNAP Twitter ego-network da
 | `.featnames` | Feature dimension names |
 
 Only `.edges` files are needed for graph algorithm processing. The system handles the large Twitter user IDs (e.g. `214328887`) correctly — they are remapped to compact sequential indices internally before any algorithm runs.
-
----
-
-## Testing
-
-A test script is included:
-
-```bash
-# Start the server first, then:
-bash test_api.sh
-```
-
-Tests all 6 algorithms against `test_graph.txt` and prints pass/fail with MPI metadata.
 
 ---
 

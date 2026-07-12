@@ -28,7 +28,7 @@ pub fn run_distributed_algorithm(
     let task_type = match algorithm {
         "dfs"          => GraphTaskType::DFS { start_node: start_node.unwrap_or(0) },
         "bfs"          => GraphTaskType::BFS { start_node: start_node.unwrap_or(0) },
-        "dijkstra"     => GraphTaskType::Dijkstra { start_node: start_node.unwrap_or(0) },
+        "dijkstra"     => GraphTaskType::Dijkstra { start_node: start_node.unwrap_or(0), end_node },
         "astar"        => {
             let goal = end_node.ok_or_else(|| "End node required for A* algorithm".to_string())?;
             GraphTaskType::AStar { start_node: start_node.unwrap_or(0), goal_node: goal }
