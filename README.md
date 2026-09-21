@@ -62,6 +62,9 @@ The binary runs different code depending on MPI rank:
 | A* | Shortest path | Path from start to goal | Heuristic search |
 | Bellman-Ford | Shortest path | Distances + negative cycle detection | Handles negative weights |
 | Kruskal | MST | Minimum spanning tree edges | Sorted by weight |
+| PageRank | Graph | Ranked node scores | Iterative, with dangling-node handling |
+| SCC | Graph | Strongly connected components | Kosaraju's algorithm |
+| Topological Sort | Graph | Node order, or none if cyclic | Kahn's algorithm |
 
 ### Input Formats
 | Format | Example |
@@ -73,13 +76,14 @@ The binary runs different code depending on MPI rank:
 Supports Twitter ego-network datasets (`.edges` files) out of the box — large node IDs like `214328887` are handled safely via compact internal indexing.
 
 ### Frontend
-- Drag & drop graph file upload
-- Interactive graph visualization (Cytoscape.js) with path highlighting
+- Drag & drop graph file upload, parsed client-side via WebAssembly in a Web Worker
+- Interactive WebGL graph visualization (reagraph) with path highlighting, in 2D or 3D
 - Algorithm selector with conditional start/end node inputs
 - MPI status chip showing process count and mode (distributed vs single)
-- Results panel: path nodes with arrows, distances table, MST edge pairs
-- Layout options: force-directed (cose), circle, grid, concentric
-- Large graph handling: hides labels/simplifies edges above 100 nodes, caps display at 300 nodes
+- Results panel: path nodes, distances, PageRank scores, SCC components, MST edge pairs, graph metrics
+- Layout options: force-directed 2D/3D, circular, radial 2D/3D
+- Path/traversal animation playback with adjustable speed
+- Large graph handling: hides labels above 60 nodes, toggleable edges above 100 nodes, caps display at 3000 nodes
 
 ---
 
@@ -90,13 +94,14 @@ Supports Twitter ego-network datasets (`.edges` files) out of the box — large 
 | Backend language | Rust (edition 2021) |
 | Web framework | Rocket 0.5 |
 | Distributed computing | OpenMPI via `rsmpi 0.8` |
-| Serialization | `bincode` (MPI messages), `serde_json` (API) |
+| Serialization | `serde_json` (MPI messages + API) |
 | Containerization | Docker + Docker Compose |
 | Process management | Supervisor |
 | Frontend framework | React 19 + TypeScript |
-| Build tool | Vite 7 |
+| Build tool | Vite 8 |
 | CSS | UnoCSS (Tailwind-compatible) |
-| Graph visualization | Cytoscape.js + react-cytoscapejs |
+| Graph visualization | reagraph (WebGL) |
+| Client-side graph parsing | Rust → WebAssembly (`frontend/wasm`), JS fallback |
 
 ---
 
@@ -130,8 +135,9 @@ API available at `http://localhost:8000`
 # Terminal 1 — backend
 cargo run --bin server
 
-# Terminal 2 — frontend dev server
-cd frontend && npm install && npm run dev
+# Terminal 2 — frontend dev server (needs wasm-pack + the wasm32-unknown-unknown
+# target on PATH — `pnpm dev` builds the WASM crate first)
+cd frontend && pnpm install && pnpm dev
 ```
 
 Frontend at `http://localhost:5173`
@@ -170,7 +176,7 @@ Accepts a multipart form with two fields:
 }
 ```
 
-Supported `algorithm` values: `bfs`, `dfs`, `dijkstra`, `astar`, `bellman-ford`, `kruskal`
+Supported `algorithm` values: `bfs`, `dfs`, `dijkstra`, `astar`, `bellman-ford`, `kruskal`, `pagerank`, `scc`, `topological-sort`
 Supported `file_format` values: `edgeList`, `adjacencyList`
 
 **Response:**
@@ -179,11 +185,18 @@ Supported `file_format` values: `edgeList`, `adjacencyList`
   "result": "Dijkstra completed",
   "path": [0, 2, 1, 5],
   "distances": [0.0, 3.0, 2.0, 11.0, ...],
+  "has_negative_cycle": null,
+  "components": null,
+  "scores": null,
   "error": null,
   "mpi_processes": 2,
   "mpi_mode": "Distributed"
 }
 ```
+`distances` and `path` are indexed/expressed by compact node index, not the original node ID — map back via the node order returned in the graph parse.
+
+### `POST /graph_metrics`
+Accepts a multipart form with `file` and `file_format` (`edgeList` or `adjacencyList`). Returns node/edge counts, density, connected components, whether the graph is a DAG, average degree, and the top 5 nodes by out-degree — independent of running any algorithm.
 
 ---
 
@@ -193,7 +206,7 @@ Supported `file_format` values: `edgeList`, `adjacencyList`
 distributed-graph-system/
 ├── src/
 │   ├── lib.rs                    # Library crate exports
-│   ├── graph.rs                  # Graph struct + all 6 algorithms
+│   ├── graph.rs                  # Graph struct + all 9 algorithms
 │   ├── file_processor.rs         # Edge list / adjacency list parser
 │   ├── mpi_processor.rs          # MPI send/receive, worker loop
 │   ├── distributed_processor.rs  # Ties file loading + MPI + algorithms together
@@ -202,6 +215,8 @@ distributed-graph-system/
 │       └── mpi_test.rs           # Standalone MPI connectivity test
 │
 ├── frontend/
+│   ├── wasm/                     # graph-wasm crate — compiled to WebAssembly,
+│   │                             # client-side graph parsing/styling (frontend/wasm/src/lib.rs)
 │   └── src/
 │       ├── App.tsx               # Root component, state, API calls
 │       ├── types.ts              # Shared TypeScript interfaces
@@ -210,15 +225,17 @@ distributed-graph-system/
 │       │   ├── MpiChip.tsx       # Green/amber MPI status badge
 │       │   ├── UploadZone.tsx    # Drag-and-drop file picker
 │       │   ├── FormatSelector.tsx # Edge list / adjacency list radio
-│       │   ├── AlgorithmSelector.tsx # 6-button algorithm grid
+│       │   ├── AlgorithmSelector.tsx # 9-button algorithm grid
 │       │   ├── NodeInputs.tsx    # Start/end node number inputs
-│       │   ├── GraphView.tsx     # Cytoscape visualization + controls
-│       │   └── Results.tsx       # Path, distances, MST edge output
+│       │   ├── GraphView.tsx     # reagraph (WebGL) visualization + controls
+│       │   └── Results.tsx       # Path, distances, PageRank, SCC, MST, metrics output
+│       ├── workers/
+│       │   └── parseGraph.worker.ts # Parses the uploaded file off the main thread
 │       └── utils/
-│           └── parseGraph.ts     # Client-side graph file parser
+│           └── parseGraph.ts     # Graph file parser — calls into WASM, JS fallback
 │
 ├── data/
-│   └── twitter/                  # Stanford SNAP Twitter ego-network dataset
+│   └── twitter/                  # Stanford SNAP Twitter ego-network dataset (gitignored)
 │       └── *.edges               # Edge list files (2-column, unweighted)
 │
 ├── Dockerfile                    # Ubuntu 22.04 + Rust + OpenMPI + SSH

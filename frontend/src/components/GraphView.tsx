@@ -85,6 +85,8 @@ const DARK_THEME = {
 
 const SCC_FILLS = ['#22d3ee','#a855f7','#f59e0b','#4ade80','#f87171','#38bdf8','#fb923c']
 
+const SPEED_MS = { fast: 40, medium: 100, slow: 280 }
+
 // ── Component ───────────────────────────────────────────────────────────────────
 
 export default function GraphView({ parsedGraph, result, algorithm, startNode, endNode }: Props) {
@@ -100,8 +102,6 @@ export default function GraphView({ parsedGraph, result, algorithm, startNode, e
   const [animStep,  setAnimStep]  = useState(-1)
   const [isPlaying, setIsPlaying] = useState(false)
   const [animSpeed, setAnimSpeed] = useState<'fast' | 'medium' | 'slow'>('medium')
-
-  const SPEED_MS = { fast: 40, medium: 100, slow: 280 }
 
   // ── Search state ───────────────────────────────────────────────────────────
   const [searchInput, setSearchInput] = useState('')
@@ -164,21 +164,27 @@ export default function GraphView({ parsedGraph, result, algorithm, startNode, e
     return { pathNodeSet, pathEdgeSet, mstEdgeSet, pathArray: path.map(String) }
   }, [result, algorithm])
 
-  // ── Reset animation when result changes ───────────────────────────────────
-  useEffect(() => {
+  // ── Reset animation when result changes (adjust state during render, not an effect) ──
+  const [prevResult, setPrevResult] = useState(result)
+  if (result !== prevResult) {
+    setPrevResult(result)
     setIsPlaying(false)
     setAnimStep(-1)
-    if (animTimerRef.current) clearTimeout(animTimerRef.current)
-  }, [result])
+  }
+
+  const animTotal = algorithm === 'kruskal' ? Math.ceil(pathArray.length / 2) : pathArray.length
+
+  // Stop playback once the animation reaches the end (clamp during render, same pattern as above)
+  if (isPlaying && animStep >= animTotal) {
+    setIsPlaying(false)
+  }
 
   // ── Animation tick ────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!isPlaying) return
-    const total = algorithm === 'kruskal' ? Math.ceil(pathArray.length / 2) : pathArray.length
-    if (animStep >= total) { setIsPlaying(false); return }
+    if (!isPlaying || animStep >= animTotal) return
     animTimerRef.current = setTimeout(() => setAnimStep(s => s + 1), SPEED_MS[animSpeed])
     return () => { if (animTimerRef.current) clearTimeout(animTimerRef.current) }
-  }, [isPlaying, animStep, animSpeed, pathArray, algorithm])
+  }, [isPlaying, animStep, animSpeed, animTotal])
 
   // ── Visible path nodes — respects animation step ──────────────────────────
   const visiblePathNodes = useMemo<Set<string>>(() => {
@@ -363,7 +369,7 @@ export default function GraphView({ parsedGraph, result, algorithm, startNode, e
   }, [result, parsedGraph])
 
   const handleNodePointerOver = useCallback((node: InternalGraphNode) => setHoverNodeId(node.id), [])
-  const handleNodePointerOut  = useCallback((_node: InternalGraphNode) => setHoverNodeId(null), [])
+  const handleNodePointerOut  = useCallback(() => setHoverNodeId(null), [])
 
   // ── Stats ──────────────────────────────────────────────────────────────────
   const density = parsedGraph.totalEdges > 0 && parsedGraph.totalNodes > 1
@@ -377,7 +383,6 @@ export default function GraphView({ parsedGraph, result, algorithm, startNode, e
     : null
 
   const hasResult    = !!result && !result.error && pathArray.length > 0
-  const animTotal    = algorithm === 'kruskal' ? Math.ceil(pathArray.length / 2) : pathArray.length
   const animProgress = animStep >= 0 ? Math.min(animStep, animTotal) : animTotal
 
   // ── Render ─────────────────────────────────────────────────────────────────

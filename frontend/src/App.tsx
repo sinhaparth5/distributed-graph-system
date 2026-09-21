@@ -39,7 +39,7 @@ export default function App() {
 
   // ── Parse file whenever file or format changes ─────────────────────────────
   useEffect(() => {
-    if (!file) { setParsedGraph(null); return }
+    if (!file) return
 
     const worker = new Worker(
       new URL('./workers/parseGraph.worker.ts', import.meta.url),
@@ -231,6 +231,7 @@ export default function App() {
               metrics={metrics}
               metricsLoading={metricsLoading}
               onComputeMetrics={computeMetrics}
+              compactToId={parsedGraph?.compactToId}
             />
           )}
         </div>

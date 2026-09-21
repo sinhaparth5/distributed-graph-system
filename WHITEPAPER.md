@@ -54,7 +54,7 @@ This system bridges that gap by providing:
 │  │                                │                          │
 │  │  Rocket HTTP Server :8000      │                          │
 │  │  MPI Rank 0 (master)           │◄────────────────────────┐│
-│  │  Algorithms: runs + merges     │  bincode over TCP/MPI   ││
+│  │  Algorithms: runs + merges     │  serde_json over TCP/MPI   ││
 │  └────────────────────────────────┘                         ││
 │                                                              ││
 │  ┌────────────────────────────────┐                         ││
@@ -127,7 +127,7 @@ This is appropriate because:
 - Many graph algorithms (BFS, Dijkstra, SCC) require the full graph structure to produce correct results — partitioning the graph would require multi-round communication to resolve cross-partition edges
 
 The communication protocol:
-1. Master serializes graph + task into a `GraphTask` struct using `bincode`
+1. Master serializes graph + task into a `GraphTask` struct using `serde_json`
 2. Master sends serialized bytes to each worker via `MPI_Send`
 3. Workers receive bytes, deserialize, run the algorithm, serialize the `TaskResult`, and send back
 4. Master collects all results and merges them
@@ -473,7 +473,7 @@ At 100ms animation ticks, JavaScript computation was not a bottleneck, but at 40
 ### 9.3 MPI Communication Overhead
 
 For a 10,000-node, 50,000-edge graph:
-- Serialization (bincode): ~5ms
+- Serialization (serde_json): ~5ms
 - Network transfer (local Docker bridge): ~2ms
 - Deserialization: ~5ms
 - Total MPI overhead: ~12ms per request

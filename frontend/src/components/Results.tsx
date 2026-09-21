@@ -6,9 +6,11 @@ interface Props {
   metrics?: GraphMetrics | null
   metricsLoading?: boolean
   onComputeMetrics?: () => void
+  /** compact index → original node ID, so distances map back to real IDs */
+  compactToId?: number[]
 }
 
-export default function Results({ result, algorithm, metrics, metricsLoading, onComputeMetrics }: Props) {
+export default function Results({ result, algorithm, metrics, metricsLoading, onComputeMetrics, compactToId }: Props) {
   const isDistributed = result.mpi_mode?.toLowerCase().includes('distributed')
 
   return (
@@ -90,7 +92,7 @@ export default function Results({ result, algorithm, metrics, metricsLoading, on
             <p className="text-xs font-mono-display text-zinc-500 uppercase tracking-widest mb-3">
               Distances
             </p>
-            <DistanceGrid distances={result.distances} />
+            <DistanceGrid distances={result.distances} compactToId={compactToId} />
           </div>
         )}
 
@@ -227,9 +229,9 @@ function KruskalEdges({ path }: { path: number[] }) {
 
 // ── Distance grid ───────────────────────────────────────────────────────────────
 
-function DistanceGrid({ distances }: { distances: number[] }) {
+function DistanceGrid({ distances, compactToId }: { distances: number[]; compactToId?: number[] }) {
   const entries = distances
-    .map((d, i) => ({ node: i, dist: d }))
+    .map((d, i) => ({ node: compactToId?.[i] ?? i, dist: d }))
     .filter(({ dist }) => dist != null && isFinite(dist) && dist < 1e14)
   if (entries.length === 0) {
     return <p className="text-zinc-600 font-mono-display text-sm">All nodes unreachable.</p>

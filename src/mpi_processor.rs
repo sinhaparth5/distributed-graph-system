@@ -2,11 +2,20 @@ use mpi::point_to_point::Status;
 use mpi::topology::Rank;
 use mpi::traits::*;
 use serde::{Deserialize, Serialize};
-use bincode::{serialize, deserialize};
 use mpi::environment::Threading;
 
 use crate::graph::{Graph, Edge, Node, NodeFeatures};
 use std::collections::HashMap;
+
+// bincode is unmaintained (RUSTSEC-2025-0141) — serde_json is already a
+// dependency for the HTTP API, so it doubles as the MPI wire format too.
+fn serialize<T: Serialize>(value: &T) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(value)
+}
+
+fn deserialize<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, serde_json::Error> {
+    serde_json::from_slice(bytes)
+}
 
 // Serializable message types for MPI communication
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +54,10 @@ pub struct GraphPartition {
     pub node_features: HashMap<usize, Vec<f64>>,
     pub feature_descriptions: HashMap<usize, String>,
     pub ego_features: HashMap<usize, Vec<f64>>,
+}
+
+impl Default for GraphPartition {
+    fn default() -> Self { Self::new() }
 }
 
 impl GraphPartition {
@@ -94,7 +107,9 @@ impl GraphPartition {
 // Internal enum to represent our execution mode
 enum ExecutionMode {
     Distributed {
-        universe: mpi::environment::Universe,
+        // Held for its lifetime only — dropping it finalises MPI, so it must
+        // outlive every other MPI call even though nothing reads it.
+        _universe: mpi::environment::Universe,
         world: mpi::topology::SimpleCommunicator,
         rank: Rank,
         size: Rank,
@@ -126,7 +141,7 @@ impl MPIProcessor {
                 
                 MPIProcessor {
                     mode: ExecutionMode::Distributed {
-                        universe,
+                        _universe: universe,
                         world,
                         rank,
                         size,
@@ -148,7 +163,7 @@ impl MPIProcessor {
                         
                         MPIProcessor {
                             mode: ExecutionMode::Distributed {
-                                universe,
+                                _universe: universe,
                                 world,
                                 rank,
                                 size,

@@ -48,7 +48,7 @@ fn run_mpi_test(universe: mpi::environment::Universe, threading: Option<Threadin
     if size > 1 {
         if rank == 0 {
             // Master sends a message to worker
-            let msg = vec![42; 10];
+            let msg = [42; 10];
             println!("Master sending data to process 1");
             world.process_at_rank(1).send(&msg[..]);
             println!("Send complete");
@@ -91,7 +91,7 @@ fn detect_mpi_environment() {
     }
     
     // Check if SSH is running
-    if let Ok(output) = std::process::Command::new("ps").args(&["-ef"]).output() {
+    if let Ok(output) = std::process::Command::new("ps").args(["-ef"]).output() {
         let output_str = String::from_utf8_lossy(&output.stdout);
         if output_str.contains("sshd") {
             println!("SSH daemon is running");

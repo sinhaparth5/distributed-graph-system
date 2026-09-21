@@ -30,7 +30,7 @@ pnpm run build:app                    # tsc + vite only (used by the Docker buil
 pnpm lint                             # eslint
 ```
 
-There are no Rust unit tests. CI (`.github/workflows/code-quality.yml`) only runs `cargo audit`; the fmt/clippy/test jobs are commented out.
+There are no Rust unit tests. CI (`.github/workflows/code-quality.yml`) only runs `cargo audit`; the fmt/clippy/test jobs are commented out. A separate spelling-check workflow (`crate-ci/typos`) also runs on push/PR to main.
 
 ## Architecture
 
@@ -40,7 +40,7 @@ There are no Rust unit tests. CI (`.github/workflows/code-quality.yml`) only run
 - **Rank 0** starts the Rocket server on `0.0.0.0:8000` with routes `/`, `/health`, `/mpi_status`, `POST /process_file`, `POST /graph_metrics`.
 - **Rank 1+** enters `MPIProcessor::run_worker_loop()` and blocks receiving tasks forever.
 
-`MPIProcessor` (`src/mpi_processor.rs`) falls back to a `SingleProcess` mode if MPI init fails, so the whole system works without mpirun — algorithms just run locally on the master. Graph and results are serialized with `bincode` for MPI messages, `serde_json` for the HTTP API.
+`MPIProcessor` (`src/mpi_processor.rs`) falls back to a `SingleProcess` mode if MPI init fails, so the whole system works without mpirun — algorithms just run locally on the master. Graph and results are serialized with `serde_json` for both MPI messages and the HTTP API (bincode was dropped after it was flagged unmaintained — RUSTSEC-2025-0141).
 
 ### Request flow
 
