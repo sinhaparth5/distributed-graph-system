@@ -15,7 +15,7 @@ const GROUPS = [
 export default function AlgorithmSelector({ value, onChange }: Props) {
   return (
     <div>
-      <p className="text-xs font-mono-display text-zinc-500 uppercase tracking-widest mb-2.5">
+      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2.5">
         Algorithm
       </p>
       <div className="space-y-2.5">
@@ -23,7 +23,7 @@ export default function AlgorithmSelector({ value, onChange }: Props) {
           const algs = ALGORITHMS.filter(a => a.group === key)
           return (
             <div key={key}>
-              <p className="text-[10px] font-mono-display text-zinc-700 uppercase tracking-wider mb-1.5">
+              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">
                 {label}
               </p>
               <div className="grid grid-cols-3 gap-1.5">
@@ -32,11 +32,11 @@ export default function AlgorithmSelector({ value, onChange }: Props) {
                     key={id}
                     onClick={() => onChange(id)}
                     className={[
-                      'px-2 py-2 rounded-lg border text-xs font-mono-display',
+                      'cursor-pointer px-2 py-2 rounded-lg border text-xs font-medium',
                       'transition-all duration-100',
                       value === id
-                        ? 'border-cyan-600/70 bg-cyan-950/40 text-cyan-300'
-                        : 'border-zinc-800 bg-zinc-900/20 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300',
+                        ? 'border-cyan-300 bg-cyan-50 text-cyan-800'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50',
                     ].join(' ')}
                   >
                     {alabel}

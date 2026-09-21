@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import './App.css'
 
 import Header            from './components/Header'
@@ -13,6 +14,7 @@ import { NEEDS_START, NEEDS_END, API_BASE } from './types'
 import type { Algorithm, FileFormat, MpiStatus, ApiResult, GraphMetrics } from './types'
 
 import type { ParsedGraph } from './utils/parseGraph'
+import { SURFACE } from './theme'
 
 export default function App() {
   // ── State ──────────────────────────────────────────────────────────────────
@@ -142,10 +144,10 @@ export default function App() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="h-screen overflow-hidden flex" style={{ background: '#070d1a' }}>
+    <div className="h-screen overflow-hidden flex" style={{ background: SURFACE.floor }}>
 
-      {/* ── Left: Graph preview — 2/3 ─────────────────────────────────────── */}
-      <div className="flex-[2] h-full overflow-hidden border-r border-zinc-800/50">
+      {/* ── Left: Graph preview ─────────────────────────────────────────────── */}
+      <div className="flex-1 h-full overflow-hidden min-w-0">
         {parsedGraph ? (
           <GraphView
             parsedGraph={parsedGraph}
@@ -153,25 +155,26 @@ export default function App() {
             algorithm={algorithm}
             startNode={startNode}
             endNode={endNode}
+            onGraphEdited={() => setResult(null)}
           />
         ) : (
           <div className="h-full flex flex-col items-center justify-center gap-5 select-none"
-               style={{ background: '#050a14' }}>
+               style={{ background: SURFACE.canvas }}>
             <svg width="64" height="64" viewBox="0 0 64 64" fill="none"
-                 xmlns="http://www.w3.org/2000/svg" className="opacity-20">
-              <circle cx="12" cy="32" r="6" stroke="#22d3ee" strokeWidth="1.5"/>
-              <circle cx="52" cy="14" r="6" stroke="#22d3ee" strokeWidth="1.5"/>
-              <circle cx="52" cy="50" r="6" stroke="#22d3ee" strokeWidth="1.5"/>
-              <circle cx="32" cy="32" r="5" stroke="#22d3ee" strokeWidth="1.5"/>
-              <line x1="18" y1="32" x2="27" y2="32" stroke="#22d3ee" strokeWidth="1.5"/>
-              <line x1="37" y1="30" x2="46" y2="17" stroke="#22d3ee" strokeWidth="1.5"/>
-              <line x1="37" y1="34" x2="46" y2="47" stroke="#22d3ee" strokeWidth="1.5"/>
+                 xmlns="http://www.w3.org/2000/svg" className="opacity-70">
+              <circle cx="12" cy="32" r="6" stroke="#0891b2" strokeWidth="1.5"/>
+              <circle cx="52" cy="14" r="6" stroke="#0891b2" strokeWidth="1.5"/>
+              <circle cx="52" cy="50" r="6" stroke="#0891b2" strokeWidth="1.5"/>
+              <circle cx="32" cy="32" r="5" stroke="#0891b2" strokeWidth="1.5"/>
+              <line x1="18" y1="32" x2="27" y2="32" stroke="#0891b2" strokeWidth="1.5"/>
+              <line x1="37" y1="30" x2="46" y2="17" stroke="#0891b2" strokeWidth="1.5"/>
+              <line x1="37" y1="34" x2="46" y2="47" stroke="#0891b2" strokeWidth="1.5"/>
             </svg>
             <div className="text-center space-y-1.5">
-              <p className="text-sm font-mono-display text-zinc-600 uppercase tracking-widest">
+              <p className="text-sm font-semibold text-slate-600 uppercase tracking-wide">
                 No graph loaded
               </p>
-              <p className="text-xs font-mono-display text-zinc-700">
+              <p className="text-xs text-slate-400">
                 Upload a file on the right to visualize
               </p>
             </div>
@@ -179,10 +182,10 @@ export default function App() {
         )}
       </div>
 
-      {/* ── Right: Controls — 1/3 ─────────────────────────────────────────── */}
+      {/* ── Right: Controls — fixed comfortable width ───────────────────────── */}
       <div
-        className="flex-[1] h-full overflow-y-auto flex flex-col grid-bg"
-        style={{ background: '#0a0f1e' }}
+        className="w-[420px] flex-shrink-0 h-full overflow-y-auto flex flex-col border-l border-slate-200 shadow-[-4px_0_16px_-8px_rgba(15,23,42,0.06)]"
+        style={{ background: SURFACE.panel }}
       >
         <div className="p-6 space-y-6 flex-1">
           <Header mpiStatus={mpiStatus} mpiError={mpiError} />
@@ -204,36 +207,46 @@ export default function App() {
             />
           )}
 
-          <button
+          <motion.button
             onClick={run}
             disabled={!canRun || loading}
+            whileTap={canRun && !loading ? { scale: 0.98 } : undefined}
             className={[
-              'w-full py-4 rounded-xl font-mono-display text-sm tracking-widest uppercase',
-              'transition-all duration-150',
+              'w-full py-3.5 rounded-xl text-sm font-semibold tracking-wide',
+              'transition-colors duration-150',
               canRun && !loading
-                ? 'bg-cyan-500 text-slate-900 hover:bg-cyan-400 active:bg-cyan-600'
-                : 'bg-zinc-800/80 text-zinc-600 cursor-not-allowed',
+                ? 'cursor-pointer bg-cyan-600 text-white hover:bg-cyan-500 active:bg-cyan-700 shadow-sm shadow-cyan-600/20'
+                : 'bg-slate-100 text-slate-400 cursor-not-allowed',
             ].join(' ')}
-            style={canRun && !loading ? { boxShadow: '0 0 24px rgba(6,182,212,0.28)' } : undefined}
           >
             {loading ? (
               <span className="flex items-center justify-center gap-3">
-                <span className="spin inline-block w-4 h-4 rounded-full border-2 border-slate-900/25 border-t-slate-900" />
+                <span className="spin inline-block w-4 h-4 rounded-full border-2 border-white/30 border-t-white" />
                 Processing…
               </span>
             ) : 'Execute Algorithm'}
-          </button>
+          </motion.button>
 
-          {result && (
-            <Results
-              result={result}
-              algorithm={algorithm}
-              metrics={metrics}
-              metricsLoading={metricsLoading}
-              onComputeMetrics={computeMetrics}
-              compactToId={parsedGraph?.compactToId}
-            />
-          )}
+          <AnimatePresence>
+            {result && (
+              <motion.div
+                key="results"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.22, ease: 'easeOut' }}
+              >
+                <Results
+                  result={result}
+                  algorithm={algorithm}
+                  metrics={metrics}
+                  metricsLoading={metricsLoading}
+                  onComputeMetrics={computeMetrics}
+                  compactToId={parsedGraph?.compactToId}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
 

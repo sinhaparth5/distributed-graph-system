@@ -8,8 +8,8 @@ interface Props {
 export default function MpiChip({ status, error }: Props) {
   if (error) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-zinc-700/60 bg-zinc-900/40 text-xs font-mono-display text-zinc-500">
-        <span className="w-1.5 h-1.5 rounded-full bg-zinc-600 block" />
+      <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-xs font-medium text-slate-500">
+        <span className="w-1.5 h-1.5 rounded-full bg-slate-400 block" />
         Server unreachable
       </div>
     )
@@ -17,8 +17,8 @@ export default function MpiChip({ status, error }: Props) {
 
   if (!status) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-900/30 text-xs font-mono-display text-zinc-600">
-        <span className="spin inline-block w-3 h-3 rounded-full border border-zinc-600 border-t-zinc-400" />
+      <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-xs font-medium text-slate-500">
+        <span className="spin inline-block w-3 h-3 rounded-full border border-slate-300 border-t-slate-500" />
         Connecting…
       </div>
     )
@@ -29,16 +29,16 @@ export default function MpiChip({ status, error }: Props) {
   return (
     <div
       className={[
-        'flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-mono-display',
+        'flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium',
         isDistributed
-          ? 'border-emerald-700/50 bg-emerald-950/30 text-emerald-400'
-          : 'border-amber-700/50 bg-amber-950/30 text-amber-400',
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : 'border-amber-200 bg-amber-50 text-amber-700',
       ].join(' ')}
     >
       <span
         className={[
           'status-dot-live w-1.5 h-1.5 rounded-full block flex-shrink-0',
-          isDistributed ? 'bg-emerald-400' : 'bg-amber-400',
+          isDistributed ? 'bg-emerald-500' : 'bg-amber-500',
         ].join(' ')}
       />
       {status.mpi_processes} process{status.mpi_processes !== 1 ? 'es' : ''} · {status.mpi_mode}

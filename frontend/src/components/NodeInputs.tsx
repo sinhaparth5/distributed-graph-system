@@ -25,7 +25,7 @@ export default function NodeInputs({
     <div className="grid grid-cols-2 gap-4">
       {needsStart && (
         <div>
-          <p className="text-xs font-mono-display text-zinc-500 uppercase tracking-widest mb-2.5">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2.5">
             Start Node
           </p>
           <input
@@ -34,14 +34,14 @@ export default function NodeInputs({
             value={startNode}
             onChange={e => onStartChange(e.target.value)}
             placeholder="0"
-            className="node-input w-full bg-zinc-900/50 border border-zinc-700 rounded-lg px-4 py-3 text-white font-mono-display text-sm placeholder-zinc-600"
+            className="node-input w-full bg-white border border-slate-300 rounded-lg px-4 py-3 text-slate-900 font-mono-display text-sm placeholder-slate-400"
           />
         </div>
       )}
 
       {needsEnd && (
         <div>
-          <p className="text-xs font-mono-display text-zinc-500 uppercase tracking-widest mb-2.5">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2.5">
             End Node
           </p>
           <input
@@ -50,7 +50,7 @@ export default function NodeInputs({
             value={endNode}
             onChange={e => onEndChange(e.target.value)}
             placeholder="1"
-            className="node-input w-full bg-zinc-900/50 border border-zinc-700 rounded-lg px-4 py-3 text-white font-mono-display text-sm placeholder-zinc-600"
+            className="node-input w-full bg-white border border-slate-300 rounded-lg px-4 py-3 text-slate-900 font-mono-display text-sm placeholder-slate-400"
           />
         </div>
       )}

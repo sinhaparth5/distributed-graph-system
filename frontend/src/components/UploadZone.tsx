@@ -23,7 +23,7 @@ export default function UploadZone({ file, onFileChange }: Props) {
 
   return (
     <div>
-      <p className="text-xs font-mono-display text-zinc-500 uppercase tracking-widest mb-2.5">
+      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2.5">
         Graph File
       </p>
 
@@ -39,22 +39,22 @@ export default function UploadZone({ file, onFileChange }: Props) {
           'cursor-pointer rounded-xl border-2 border-dashed p-8 text-center',
           'transition-colors duration-150 select-none',
           dragging
-            ? 'border-cyan-500 bg-cyan-950/20'
+            ? 'border-cyan-400 bg-cyan-50'
             : file
-              ? 'border-zinc-600 bg-zinc-900/30'
-              : 'border-zinc-700/80 bg-zinc-900/20 hover:border-zinc-600',
+              ? 'border-slate-300 bg-slate-50'
+              : 'border-slate-200 bg-slate-50/60 hover:border-slate-300 hover:bg-slate-50',
         ].join(' ')}
       >
         {file ? (
           <div className="flex items-center justify-center gap-3">
-            <span className="text-cyan-500 font-mono-display text-lg">◈</span>
+            <span className="text-cyan-600 font-mono-display text-lg">◈</span>
             <div className="text-left min-w-0">
-              <p className="text-white font-mono-display text-sm truncate">{file.name}</p>
-              <p className="text-zinc-500 text-xs mt-0.5">{(file.size / 1024).toFixed(1)} KB</p>
+              <p className="text-slate-900 text-sm font-medium truncate">{file.name}</p>
+              <p className="text-slate-500 text-xs mt-0.5">{(file.size / 1024).toFixed(1)} KB</p>
             </div>
             <button
               onClick={e => { e.stopPropagation(); onFileChange(null) }}
-              className="ml-2 w-6 h-6 rounded-full bg-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 text-sm leading-none transition-colors flex items-center justify-center flex-shrink-0"
+              className="cursor-pointer ml-2 w-6 h-6 rounded-full bg-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-300 text-sm leading-none transition-colors flex items-center justify-center flex-shrink-0"
               aria-label="Remove file"
             >
               ×
@@ -62,11 +62,11 @@ export default function UploadZone({ file, onFileChange }: Props) {
           </div>
         ) : (
           <>
-            <p className="text-zinc-400 text-sm">
-              Drop a <span className="font-mono-display text-zinc-300">.txt</span> file here, or{' '}
-              <span className="text-cyan-400">click to browse</span>
+            <p className="text-slate-600 text-sm">
+              Drop a <span className="font-mono-display text-slate-700">.txt</span> file here, or{' '}
+              <span className="text-cyan-700 font-medium">click to browse</span>
             </p>
-            <p className="text-zinc-600 text-xs mt-1">Edge list or adjacency list format</p>
+            <p className="text-slate-400 text-xs mt-1">Edge list or adjacency list format</p>
           </>
         )}
       </div>
